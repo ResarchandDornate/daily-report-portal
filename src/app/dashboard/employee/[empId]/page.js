@@ -1,0 +1,439 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import {
+  buildSummaryText,
+  departmentById,
+  downloadFile,
+  employeeById,
+  formatPretty,
+  getMonthRange,
+  getWeekRange,
+  loadReports,
+  reportsToCSV,
+  shareViaEmail,
+  shareViaWhatsApp,
+  shiftDays,
+  todayISO,
+} from "@/lib/data";
+import { Table } from "@/components/Table";
+
+export default function EmployeePage() {
+  const params = useParams();
+  const empId = params.empId;
+  const employee = employeeById(empId);
+  const dept = employee ? departmentById(employee.department) : null;
+
+  const [allReports, setAllReports] = useState([]);
+  const [showFilter, setShowFilter] = useState(false);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState(todayISO());
+  const [summary, setSummary] = useState(null);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [ceoEmail, setCeoEmail] = useState("ceo@ornatesolar.com");
+  const [ceoPhone, setCeoPhone] = useState("");
+
+  useEffect(() => {
+    setAllReports(loadReports());
+  }, []);
+
+  const myReports = useMemo(
+    () => allReports.filter((r) => r.employeeId === empId),
+    [allReports, empId]
+  );
+
+  useEffect(() => {
+    if (!start && myReports.length) {
+      const earliest = myReports.reduce((min, r) => (r.date < min ? r.date : min), myReports[0].date);
+      setStart(earliest);
+    }
+  }, [myReports, start]);
+
+  const filtered = useMemo(() => {
+    return myReports
+      .filter((r) => (start ? r.date >= start : true))
+      .filter((r) => (end ? r.date <= end : true))
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [myReports, start, end]);
+
+  const stats = useMemo(() => {
+    const lastDate = myReports.length
+      ? myReports.reduce((max, r) => (r.date > max ? r.date : max), myReports[0].date)
+      : null;
+    const submittedToday = myReports.some((r) => r.date === todayISO());
+    return {
+      total: myReports.length,
+      inRange: filtered.length,
+      lastDate,
+      submittedToday,
+    };
+  }, [myReports, filtered]);
+
+  function generateSummary(kind) {
+    if (!employee) return;
+    let range;
+    if (kind === "weekly") range = getWeekRange();
+    else if (kind === "monthly") range = getMonthRange();
+    else range = { start, end };
+
+    const reportsForRange = myReports.filter((r) => r.date >= range.start && r.date <= range.end);
+    const text = buildSummaryText(reportsForRange, range, "CEO");
+    setSummary({ kind, range, text, reports: reportsForRange });
+    setShareOpen(false);
+    setTimeout(() => {
+      const el = document.getElementById("summary-card");
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  }
+
+  function downloadSummaryCSV() {
+    if (!summary) return;
+    const csv = reportsToCSV(summary.reports);
+    downloadFile(`${employee.name.replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.csv`, csv, "text/csv");
+  }
+
+  function downloadSummaryText() {
+    if (!summary) return;
+    downloadFile(`${employee.name.replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.txt`, summary.text, "text/plain");
+  }
+
+  function copySummary() {
+    if (!summary || typeof navigator === "undefined") return;
+    navigator.clipboard?.writeText(summary.text);
+  }
+
+  function emailSummary() {
+    if (!summary || !employee) return;
+    shareViaEmail({
+      to: ceoEmail,
+      subject: `${employee.name} — ${summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Report"} Summary (${formatPretty(summary.range.start)} – ${formatPretty(summary.range.end)})`,
+      body: summary.text,
+    });
+  }
+
+  function whatsappSummary() {
+    if (!summary) return;
+    shareViaWhatsApp({ phone: ceoPhone, text: summary.text });
+  }
+
+  function resetFilter() {
+    if (myReports.length) {
+      const earliest = myReports.reduce((min, r) => (r.date < min ? r.date : min), myReports[0].date);
+      setStart(earliest);
+    } else {
+      setStart("");
+    }
+    setEnd(todayISO());
+  }
+
+  function setLast7() { setStart(shiftDays(todayISO(), -6)); setEnd(todayISO()); }
+  function setLast30() { setStart(shiftDays(todayISO(), -29)); setEnd(todayISO()); }
+
+  if (!employee) {
+    return (
+      <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-900">
+        <h2 className="text-sm font-semibold">Employee not found</h2>
+        <p className="mt-1 text-xs">No employee with id <code className="rounded bg-rose-100 px-1">{empId}</code>.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Breadcrumb */}
+      <nav className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+        <Link href="/dashboard" className="hover:text-orange-700">Overview</Link>
+        <span>/</span>
+        <Link href={`/dashboard/department/${employee.department}`} className="hover:text-orange-700">
+          {dept?.name}
+        </Link>
+        <span>/</span>
+        <span className="font-medium text-zinc-800">{employee.name}</span>
+      </nav>
+
+      {/* Header card */}
+      <div className={`relative overflow-hidden rounded-lg border ${tintBorder(dept?.color)} ${tintBg(dept?.color)} px-4 py-3 shadow-soft`}>
+        <div aria-hidden className="absolute inset-0 bg-dot-pattern opacity-40" />
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Avatar name={employee.name} />
+            <div className="leading-tight">
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-base font-semibold tracking-tight text-zinc-900">{employee.name}</h1>
+                <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ${badgeBg(dept?.color)}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept?.color)}`} />
+                  {dept?.name}
+                </span>
+                {stats.submittedToday ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                    Submitted
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
+                    Missing today
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-[11px] text-zinc-600">{employee.title} • {employee.email}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 text-center">
+            <Stat label="Total" value={stats.total} />
+            <Stat label="In range" value={stats.inRange} />
+            <Stat label="Last" value={stats.lastDate ? formatPretty(stats.lastDate) : "—"} small />
+          </div>
+        </div>
+      </div>
+
+      {/* Action toolbar */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            onClick={() => setShowFilter((v) => !v)}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition ${
+              showFilter
+                ? "border-orange-300 bg-orange-50 text-orange-700"
+                : "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-50"
+            }`}
+          >
+            <FilterIcon className="h-3.5 w-3.5" />
+            Filter
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            onClick={() => generateSummary("weekly")}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50"
+          >
+            <CalendarIcon className="h-3.5 w-3.5" />
+            Weekly
+          </button>
+          <button
+            onClick={() => generateSummary("monthly")}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-800 hover:bg-zinc-50"
+          >
+            <CalendarIcon className="h-3.5 w-3.5" />
+            Monthly
+          </button>
+          <button
+            onClick={() => generateSummary("custom")}
+            className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700"
+          >
+            Generate for filter
+          </button>
+        </div>
+      </div>
+
+      {/* Filter panel */}
+      {showFilter && (
+        <div className="rounded-lg border border-zinc-200 bg-white p-3">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-4">
+            <Field label="From">
+              <input type="date" value={start} max={end} onChange={(e) => setStart(e.target.value)} className={inputClass} />
+            </Field>
+            <Field label="To">
+              <input type="date" value={end} min={start} max={todayISO()} onChange={(e) => setEnd(e.target.value)} className={inputClass} />
+            </Field>
+            <div className="sm:col-span-2 flex items-end gap-1.5">
+              <button onClick={setLast7} className={chipClass}>Last 7 days</button>
+              <button onClick={setLast30} className={chipClass}>Last 30 days</button>
+              <button onClick={resetFilter} className={chipClass}>All time</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Summary card */}
+      {summary && (
+        <div id="summary-card" className="rounded-lg border border-orange-200 bg-white">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 bg-orange-50 px-4 py-3">
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-900">
+                {summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Custom"} Summary — {employee.name}
+              </h3>
+              <p className="text-[11px] text-zinc-500">
+                {formatPretty(summary.range.start)} → {formatPretty(summary.range.end)} • {summary.reports.length} {summary.reports.length === 1 ? "report" : "reports"}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <ActionBtn onClick={copySummary}>Copy</ActionBtn>
+              <ActionBtn onClick={downloadSummaryText}>Download .txt</ActionBtn>
+              <ActionBtn onClick={downloadSummaryCSV} tone="dark">CSV</ActionBtn>
+              <ActionBtn onClick={() => setShareOpen((v) => !v)} tone="primary">Share with CEO</ActionBtn>
+              <ActionBtn onClick={() => setSummary(null)} tone="ghost">Close</ActionBtn>
+            </div>
+          </div>
+          {shareOpen && (
+            <div className="space-y-2.5 border-b border-zinc-100 bg-zinc-50 px-4 py-3">
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <Field label="CEO email">
+                  <input type="email" value={ceoEmail} onChange={(e) => setCeoEmail(e.target.value)} className={inputClass} />
+                </Field>
+                <Field label="CEO WhatsApp (with country code)">
+                  <input type="tel" value={ceoPhone} onChange={(e) => setCeoPhone(e.target.value)} placeholder="e.g. 919812345678" className={inputClass} />
+                </Field>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button onClick={emailSummary} className="inline-flex items-center gap-1.5 rounded-md bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-700">
+                  Send via Email
+                </button>
+                <button onClick={whatsappSummary} className="inline-flex items-center gap-1.5 rounded-md bg-[#25D366] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#1ebd5b]">
+                  Send via WhatsApp
+                </button>
+              </div>
+            </div>
+          )}
+          <pre className="max-h-95 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-relaxed text-zinc-700">
+{summary.text}
+          </pre>
+        </div>
+      )}
+
+      {/* Reports table */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">Daily reports</h3>
+            <p className="text-[11px] text-zinc-500">{filtered.length} {filtered.length === 1 ? "report" : "reports"} in current range</p>
+          </div>
+        </div>
+        <Table maxHeight={460}>
+          <Table.Head>
+            <Table.Row>
+              <Table.Th className="w-12 text-center">#</Table.Th>
+              <Table.Th>Date</Table.Th>
+              <Table.Th>Work Done</Table.Th>
+              <Table.Th>Work in Progress</Table.Th>
+              <Table.Th>Upcoming Priorities</Table.Th>
+              <Table.Th>Challenges / Support</Table.Th>
+              <Table.Th>Other Update</Table.Th>
+            </Table.Row>
+          </Table.Head>
+          <Table.Body>
+            {filtered.length === 0 ? (
+              <Table.Empty colSpan={7} message="No reports in this range." />
+            ) : (
+              filtered.map((r, i) => (
+                <Table.Row key={r.id}>
+                  <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                  <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPretty(r.date)}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">{r.workDone || "—"}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">{r.workInProgress || "—"}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">{r.upcomingPriorities || "—"}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">{r.challenges || "—"}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">{r.otherUpdate || "—"}</Table.Td>
+                </Table.Row>
+              ))
+            )}
+          </Table.Body>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- bits ---------- */
+
+const inputClass =
+  "block w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20";
+
+const chipClass =
+  "rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50";
+
+function Field({ label, children }) {
+  return (
+    <div>
+      <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">{label}</label>
+      <div className="mt-1">{children}</div>
+    </div>
+  );
+}
+
+function Stat({ label, value, small = false }) {
+  return (
+    <div>
+      <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">{label}</p>
+      <p className={`mt-0.5 font-semibold text-zinc-900 ${small ? "text-xs" : "text-lg"}`}>{value}</p>
+    </div>
+  );
+}
+
+function ActionBtn({ children, onClick, tone = "default" }) {
+  const tones = {
+    default: "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50",
+    dark: "bg-zinc-900 text-white hover:bg-zinc-800",
+    primary: "bg-orange-600 text-white hover:bg-orange-700",
+    ghost: "text-zinc-500 hover:bg-zinc-100",
+  };
+  return (
+    <button onClick={onClick} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium ${tones[tone]}`}>
+      {children}
+    </button>
+  );
+}
+
+function Avatar({ name, large = false }) {
+  const initials = name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
+  const sz = large ? "h-11 w-11 text-sm" : "h-6 w-6 text-[9px]";
+  return (
+    <span className={`flex shrink-0 items-center justify-center rounded-full bg-orange-600 font-semibold text-white ${sz}`}>
+      {initials}
+    </span>
+  );
+}
+
+function FilterIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M3 4h18l-7 9v6l-4 2v-8L3 4Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+  );
+}
+
+function tintBg(color) {
+  return {
+    indigo:  "bg-linear-to-br from-indigo-50 via-violet-50 to-stone-50",
+    amber:   "bg-linear-to-br from-amber-50 via-orange-50 to-stone-50",
+    emerald: "bg-linear-to-br from-emerald-50 via-teal-50 to-stone-50",
+    rose:    "bg-linear-to-br from-rose-50 via-pink-50 to-stone-50",
+    sky:     "bg-linear-to-br from-sky-50 via-cyan-50 to-stone-50",
+  }[color] || "bg-linear-to-br from-stone-50 to-white";
+}
+
+function tintBorder(color) {
+  return {
+    indigo: "border-indigo-100", amber: "border-amber-100", emerald: "border-emerald-100",
+    rose: "border-rose-100", sky: "border-sky-100",
+  }[color] || "border-zinc-200";
+}
+
+function dotBg(color) {
+  return {
+    indigo: "bg-indigo-500",
+    amber: "bg-amber-500",
+    emerald: "bg-emerald-500",
+    rose: "bg-rose-500",
+    sky: "bg-sky-500",
+  }[color] || "bg-zinc-400";
+}
+
+function badgeBg(color) {
+  return {
+    indigo: "bg-indigo-50 text-indigo-700",
+    amber: "bg-amber-50 text-amber-800",
+    emerald: "bg-emerald-50 text-emerald-700",
+    rose: "bg-rose-50 text-rose-700",
+    sky: "bg-sky-50 text-sky-700",
+  }[color] || "bg-zinc-100 text-zinc-700";
+}

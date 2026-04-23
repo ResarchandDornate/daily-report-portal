@@ -1,8 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fbf6ef;          /* warm cream */
+  --foreground: #1c1917;
+  --brand-50: #fff7ed;
+  --brand-100: #ffedd5;
+  --brand-500: #f97316;
+  --brand-600: #ea580c;
+  --brand-700: #c2410c;
+  --surface: #ffffff;
+  --shadow-soft: 0 1px 2px rgba(20, 14, 10, 0.04), 0 6px 18px -10px rgba(20, 14, 10, 0.10);
+  --shadow-lift: 0 2px 4px rgba(20, 14, 10, 0.05), 0 16px 36px -14px rgba(20, 14, 10, 0.18);
 }
 
 @theme inline {
@@ -12,15 +20,116 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
+  background:
+    radial-gradient(ellipse 70% 40% at 0% 0%, rgba(249, 115, 22, 0.08), transparent 60%),
+    radial-gradient(ellipse 60% 40% at 100% 100%, rgba(245, 158, 11, 0.06), transparent 60%),
+    var(--background);
+  background-attachment: fixed;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* ---------- Utility classes ---------- */
+
+.shadow-soft { box-shadow: var(--shadow-soft); }
+.shadow-lift { box-shadow: var(--shadow-lift); }
+
+/* Card surface variants */
+.surface-card {
+  background: #ffffff;
+  border: 1px solid #f1ebe1;
+  box-shadow: var(--shadow-soft);
+}
+.surface-tinted {
+  background: linear-gradient(180deg, #fff8f0 0%, #ffffff 100%);
+  border: 1px solid #fbe5cc;
+}
+.surface-muted {
+  background: #faf5ee;
+  border: 1px solid #f1ebe1;
+}
+
+/* Section accent — colored left border */
+.accent-orange { border-left: 3px solid #f97316; }
+
+/* Subtle dot pattern overlay for hero/banner cards */
+.bg-dot-pattern {
+  background-image: radial-gradient(circle at 1px 1px, rgba(120, 53, 15, 0.08) 1px, transparent 0);
+  background-size: 16px 16px;
+}
+
+/* Branded chip for badges/pills */
+.chip-orange {
+  background: var(--brand-50);
+  color: var(--brand-700);
+  border: 1px solid #fed7aa;
+}
+
+/* Brand gradient strip — for card headers */
+.bg-brand-strip {
+  background: linear-gradient(90deg, #fff7ed 0%, #fff8f0 50%, #fffaf3 100%);
+}
+
+/* Animated gradient strip — for top of cards */
+@keyframes shine {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.bg-shine {
+  background: linear-gradient(90deg, #fb923c, #fbbf24, #f97316, #fbbf24, #fb923c);
+  background-size: 200% 100%;
+  animation: shine 6s linear infinite;
+}
+
+/* Brand gradient text */
+.text-brand-gradient {
+  background: linear-gradient(120deg, #f97316, #f59e0b, #f97316);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Brand gradient surface — for buttons */
+.bg-brand-button {
+  background: linear-gradient(180deg, #f97316 0%, #ea580c 100%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.25) inset,
+    0 1px 2px rgba(124, 45, 18, 0.25),
+    0 8px 16px -8px rgba(234, 88, 12, 0.45);
+}
+.bg-brand-button:hover {
+  background: linear-gradient(180deg, #ea580c 0%, #c2410c 100%);
+}
+
+/* Gentle floating animation */
+@keyframes float-soft {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-6px); }
+}
+.animate-float-soft { animation: float-soft 6s ease-in-out infinite; }
+
+/* Gentle pulse for background blobs */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%      { opacity: 0.7; transform: scale(1.06); }
+}
+.animate-pulse-soft { animation: pulse-soft 9s ease-in-out infinite; }
+
+/* Custom scrollbar — warm */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(249, 115, 22, 0.22);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(249, 115, 22, 0.36); background-clip: padding-box; }
+
+::selection { background: rgba(249, 115, 22, 0.22); color: inherit; }
