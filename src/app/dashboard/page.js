@@ -1,43 +1,61 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import {
-  DEPARTMENTS,
-  EMPLOYEES,
-  departmentById,
-  employeeById,
   formatPretty,
-  loadCurrentUser,
-  loadReports,
-  missingToday,
+  fullName,
+  getReportFields,
+  indexById,
   todayISO,
 } from "@/lib/data";
+import {
+  useDepartments,
+  useEmployees,
+  useMe,
+  useMissingToday,
+  useReports,
+} from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function OverviewPage() {
-  const [reports, setReports] = useState([]);
-  const [user, setUser] = useState(null);
   const today = todayISO();
 
-  useEffect(() => {
-    setReports(loadReports());
-    setUser(loadCurrentUser());
-  }, []);
+  const { data: me } = useMe();
+  const isHR = me?.role === "hr";
 
-  const todayReports = useMemo(() => reports.filter((r) => r.date === today), [reports, today]);
-  const missing = useMemo(() => missingToday(reports, EMPLOYEES, today), [reports, today]);
+  // For HR: fetch everything. For employees: fetch only their own reports.
+  const { data: departments = [] } = useDepartments();
+  const { data: employees = [] } = useEmployees();
+  const reportFilters = useMemo(
+    () => (me && !isHR ? { employee: me.id } : {}),
+    [me, isHR],
+  );
+  const { data: reports = [] } = useReports(reportFilters);
+  const { data: missingIds = [] } = useMissingToday();
+
+  const employeesById = useMemo(() => indexById(employees), [employees]);
+
+  const todayReports = useMemo(
+    () => reports.filter((r) => r.date === today),
+    [reports, today]
+  );
+
+  const missing = useMemo(
+    () => missingIds.map((id) => employeesById[id]).filter(Boolean),
+    [missingIds, employeesById]
+  );
 
   const deptStats = useMemo(
     () =>
-      DEPARTMENTS.map((d) => {
-        const inDept = EMPLOYEES.filter((e) => e.department === d.id);
+      departments.map((d) => {
+        const inDept = employees.filter((e) => e.department?.slug === d.slug);
         const submitted = inDept.filter((e) =>
-          todayReports.some((r) => r.employeeId === e.id)
+          todayReports.some((r) => r.user_id === e.id)
         ).length;
         return { ...d, total: inDept.length, submitted, missing: inDept.length - submitted };
       }),
-    [todayReports]
+    [departments, employees, todayReports]
   );
 
   const recent = useMemo(
@@ -45,20 +63,22 @@ export default function OverviewPage() {
     [reports]
   );
 
-  if (!user) return null;
-  const isHR = user.role === "hr";
+  if (!me) return null;
 
   return (
     <div className="space-y-5">
-      {/* Stat cards */}
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="Total Employees" value={EMPLOYEES.length} hint="Across 5 departments" icon="users" tone="orange" />
-        <StatCard label="Reports Today" value={todayReports.length} hint={formatPretty(today)} icon="check" tone="emerald" />
-        <StatCard label="Missing Today" value={missing.length} hint="Pending submissions" icon="alert" tone="rose" />
-        <StatCard label="Departments" value={DEPARTMENTS.length} hint="Active teams" icon="grid" tone="zinc" />
-      </section>
+      {/* Stat cards — HR only */}
+      {isHR && (
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatCard label="Total Employees" value={employees.length} hint={`Across ${departments.length} departments`} icon="users" tone="orange" />
+          <StatCard label="Reports Today" value={todayReports.length} hint={formatPretty(today)} icon="check" tone="emerald" />
+          <StatCard label="Missing Today" value={missing.length} hint="Pending submissions" icon="alert" tone="rose" />
+          <StatCard label="Departments" value={departments.length} hint="Active teams" icon="grid" tone="zinc" />
+        </section>
+      )}
 
-      {/* Departments + Missing */}
+      {/* Departments + Missing — HR only */}
+      {isHR && (
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card>
@@ -68,8 +88,8 @@ export default function OverviewPage() {
                 const pct = d.total ? Math.round((d.submitted / d.total) * 100) : 0;
                 return (
                   <Link
-                    key={d.id}
-                    href={`/dashboard/department/${d.id}`}
+                    key={d.slug}
+                    href={`/dashboard/department/${d.slug}`}
                     className="block rounded-md border border-zinc-200 bg-white p-3 transition hover:border-zinc-300"
                   >
                     <div className="flex items-center justify-between">
@@ -132,13 +152,13 @@ export default function OverviewPage() {
                   href={`/dashboard/employee/${emp.id}`}
                   className="flex items-center gap-2.5 rounded-md px-2 py-1.5 transition hover:bg-zinc-50"
                 >
-                  <Avatar name={emp.name} />
+                  <Avatar name={fullName(emp)} />
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium text-zinc-900">
-                      {emp.name}
+                      {fullName(emp)}
                     </p>
                     <p className="truncate text-[11px] text-zinc-500">
-                      {departmentById(emp.department)?.name} • {emp.title}
+                      {emp.department?.name || "—"} • {emp.title || ""}
                     </p>
                   </div>
                   <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-rose-700">
@@ -150,12 +170,13 @@ export default function OverviewPage() {
           </Card>
         </div>
       </section>
+      )}
 
-      {/* Recent submissions */}
+      {/* Recent submissions — visible to everyone (employees see only their own) */}
       <Card>
         <CardHeader
-          title="Recent submissions"
-          subtitle="Latest 8 reports from across the company"
+          title={isHR ? "Recent submissions" : "My recent submissions"}
+          subtitle={isHR ? "Latest 8 reports from across the company" : "Your last 8 daily reports"}
           right={
             isHR && (
               <Link
@@ -175,17 +196,22 @@ export default function OverviewPage() {
               <Table.Th>Date</Table.Th>
               <Table.Th>Employee</Table.Th>
               <Table.Th>Department</Table.Th>
-              <Table.Th>Work Done</Table.Th>
-              <Table.Th>In Progress</Table.Th>
+              <Table.Th>Summary</Table.Th>
             </Table.Row>
           </Table.Head>
           <Table.Body>
             {recent.length === 0 ? (
-              <Table.Empty colSpan={6} message="No reports yet." />
+              <Table.Empty colSpan={5} message="No reports yet." />
             ) : (
               recent.map((r, i) => {
-                const emp = employeeById(r.employeeId);
-                const dept = emp ? departmentById(emp.department) : null;
+                const emp = employeesById[r.user_id];
+                const dept = emp?.department;
+                const fields = emp ? getReportFields(emp.department) : [];
+                const summary = fields
+                  .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join("  ·  ") || "—";
                 return (
                   <Table.Row key={r.id}>
                     <Table.Td className="text-center font-medium text-zinc-500">{i + 1}</Table.Td>
@@ -197,9 +223,9 @@ export default function OverviewPage() {
                         href={emp ? `/dashboard/employee/${emp.id}` : "#"}
                         className="flex items-center gap-2 hover:text-orange-700"
                       >
-                        <Avatar name={emp?.name || "—"} />
+                        <Avatar name={emp ? fullName(emp) : "—"} />
                         <span className="font-medium text-zinc-900 hover:text-orange-700">
-                          {emp?.name || r.employeeId}
+                          {emp ? fullName(emp) : `User #${r.user_id}`}
                         </span>
                       </Link>
                     </Table.Td>
@@ -209,8 +235,7 @@ export default function OverviewPage() {
                         {dept?.name || "—"}
                       </span>
                     </Table.Td>
-                    <Table.Td className="max-w-xs truncate text-zinc-600">{r.workDone}</Table.Td>
-                    <Table.Td className="max-w-xs truncate text-zinc-600">{r.workInProgress}</Table.Td>
+                    <Table.Td className="max-w-md truncate text-zinc-600">{summary}</Table.Td>
                   </Table.Row>
                 );
               })

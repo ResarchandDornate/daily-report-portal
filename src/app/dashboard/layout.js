@@ -4,50 +4,45 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import {
-  DEPARTMENTS,
-  clearCurrentUser,
-  departmentById,
-  loadCurrentUser,
-} from "@/lib/data";
-
-const NAV = [
-  { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
-  { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
-  { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
-  {
-    label: "Departments",
-    icon: "users",
-    roles: ["hr"],
-    children: DEPARTMENTS.map((d) => ({
-      href: `/dashboard/department/${d.id}`,
-      label: d.name,
-      color: d.color,
-    })),
-  },
-  { href: "/dashboard/summary", label: "Generate Summary", icon: "chart", roles: ["hr"] },
-];
+import { useDepartments, useLogout, useMe } from "@/lib/queries";
+import { fullName } from "@/lib/data";
+import { auth } from "@/lib/api";
 
 export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [user, setUser] = useState(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
+  const { data: me, isLoading: meLoading, isError: meError } = useMe();
+  const { data: departments = [] } = useDepartments();
+  const logout = useLogout();
+
   function handleLogout() {
-    clearCurrentUser();
+    logout();
     router.push("/login");
   }
 
   useEffect(() => {
-    setUser(loadCurrentUser());
-  }, []);
-
-  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMobileNavOpen(false);
   }, [pathname]);
 
-  if (!user) {
+  // Bounce to /login if no token at all, or backend says we're 401
+  useEffect(() => {
+    if (!auth.isLoggedIn() || meError) router.push("/login");
+  }, [meError, router]);
+
+  // Route guard — non-HR users get bounced from HR-only pages back to /dashboard.
+  // The only employee-accessible routes are /dashboard and /dashboard/my-report.
+  useEffect(() => {
+    if (!me) return;
+    if (me.role === "hr") return;
+    const employeePaths = ["/dashboard", "/dashboard/my-report"];
+    const isAllowed = employeePaths.includes(pathname);
+    if (!isAllowed) router.replace("/dashboard");
+  }, [me, pathname, router]);
+
+  if (meLoading || !me) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-zinc-50">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
@@ -55,7 +50,30 @@ export default function DashboardLayout({ children }) {
     );
   }
 
-  const visibleNav = NAV.filter((n) => n.roles.includes(user.role));
+  const NAV = [
+    { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
+    { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
+    { href: "/dashboard/employees", label: "All Employees", icon: "users", roles: ["hr"] },
+    { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
+    {
+      label: "Departments",
+      icon: "users",
+      roles: ["hr"],
+      children: departments.map((d) => ({
+        href: `/dashboard/department/${d.slug}`,
+        label: d.name,
+        color: d.color,
+      })),
+    },
+    { href: "/dashboard/summary", label: "Generate Summary", icon: "chart", roles: ["hr"] },
+  ];
+
+  const visibleNav = NAV.filter((n) => n.roles.includes(me.role));
+  const meName = fullName(me);
+  const subtitle =
+    me.role === "hr"
+      ? "HR Manager"
+      : `${me.department?.name || ""} • ${me.title || ""}`;
 
   return (
     <div className="flex min-h-screen bg-zinc-50">
@@ -88,14 +106,10 @@ export default function DashboardLayout({ children }) {
 
         <div className="border-t border-zinc-200 p-3">
           <div className="flex items-center gap-2.5 rounded-md border border-zinc-200 bg-zinc-50 p-2.5">
-            <UserAvatar name={user.name} />
+            <UserAvatar name={meName} />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium text-zinc-900">{user.name}</p>
-              <p className="truncate text-[10px] text-zinc-500">
-                {user.role === "hr"
-                  ? "HR Manager"
-                  : `${departmentById(user.department)?.name || ""} • ${user.title}`}
-              </p>
+              <p className="truncate text-xs font-medium text-zinc-900">{meName}</p>
+              <p className="truncate text-[10px] text-zinc-500">{subtitle}</p>
             </div>
             <button
               onClick={handleLogout}
@@ -192,6 +206,7 @@ function NavGroup({ item, pathname }) {
   const [open, setOpen] = useState(childActive || onSection);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (childActive || onSection) setOpen(true);
   }, [childActive, onSection]);
 
@@ -253,14 +268,6 @@ function Dot({ color }) {
     sky: "bg-sky-500",
   };
   return <span className={`h-1.5 w-1.5 rounded-full ${map[color] || "bg-zinc-400"}`} />;
-}
-
-function DotCheck() {
-  return (
-    <svg viewBox="0 0 20 20" className="h-3.5 w-3.5 text-orange-600" fill="currentColor" aria-hidden>
-      <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.6l6.3-6.3a1 1 0 0 1 1.4 0Z" />
-    </svg>
-  );
 }
 
 function ChevronIcon({ className = "" }) {

@@ -13,7 +13,7 @@ import {
   FiBriefcase,
 } from "react-icons/fi";
 import Image from "next/image";
-import { DEPARTMENTS } from "@/lib/data";
+import { useDepartments, useLogin, useSignup } from "@/lib/queries";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -21,7 +21,11 @@ export default function LoginPage() {
   const [isSignup, setIsSignup] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
-  const [loading, setLoading] = useState(false);
+
+  const loginMutation = useLogin();
+  const signupMutation = useSignup();
+  const loading = loginMutation.isPending || signupMutation.isPending;
+  const { data: departments = [] } = useDepartments();
 
   const [loginData, setLoginData] = useState({ email: "", password: "" });
   const [signupData, setSignupData] = useState({
@@ -56,22 +60,11 @@ export default function LoginPage() {
         setErrorMsg("Passwords do not match");
         return;
       }
-      setLoading(true);
       try {
-        await new Promise((r) => setTimeout(r, 500));
-        setSignupData({
-          email: "",
-          username: "",
-          firstName: "",
-          lastName: "",
-          contactNumber: "",
-          department: "",
-          password: "",
-          confirmPassword: "",
-        });
-        setIsSignup(false);
-      } finally {
-        setLoading(false);
+        await signupMutation.mutateAsync(signupData);
+        router.push("/dashboard");
+      } catch (err) {
+        setErrorMsg(err.message || "Signup failed");
       }
       return;
     }
@@ -80,16 +73,11 @@ export default function LoginPage() {
       setErrorMsg("Please fill in all fields");
       return;
     }
-    setLoading(true);
     try {
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        localStorage.setItem("userEmail", loginData.email);
-      } catch {}
+      await loginMutation.mutateAsync(loginData);
       router.push("/dashboard");
     } catch (err) {
       setErrorMsg(err.message || "Login failed");
-      setLoading(false);
     }
   };
 
@@ -124,9 +112,9 @@ export default function LoginPage() {
             Daily Report Portal
           </span>
 
-          <h2 className="text-3xl font-semibold tracking-tight text-zinc-900 ">
-            Track work{"     "}
-            <h2 className="text-brand-gradient text-4xl ">Stay aligned.</h2>
+          <h2 className="text-3xl font-semibold tracking-tight text-zinc-900">
+            Track work{" "}
+            <span className="text-brand-gradient text-4xl">Stay aligned.</span>
           </h2>
 
           <p className="mx-auto max-w-xs text-sm text-zinc-600 leading-relaxed lg:mx-0">
@@ -244,8 +232,8 @@ export default function LoginPage() {
                         className={`${inputClass} appearance-none cursor-pointer`}
                       >
                         <option value="">Select your department</option>
-                        {DEPARTMENTS.map((d) => (
-                          <option key={d.id} value={d.id}>{d.name}</option>
+                        {departments.map((d) => (
+                          <option key={d.slug} value={d.slug}>{d.name}</option>
                         ))}
                       </select>
                     </Field>

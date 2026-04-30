@@ -2,82 +2,83 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  REPORT_FIELDS,
-  departmentById,
   formatPretty,
-  loadCurrentUser,
-  loadReports,
+  fullName,
+  getReportFields,
   todayISO,
-  upsertReport,
 } from "@/lib/data";
+import { useMe, useReports, useSubmitReport } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
-const EMPTY = {
-  workDone: "",
-  workInProgress: "",
-  upcomingPriorities: "",
-  challenges: "",
-  otherUpdate: "",
-};
+const buildEmpty = (fields) =>
+  Object.fromEntries(fields.map((f) => [f.key, ""]));
 
 export default function MyReportPage() {
-  const [user, setUser] = useState(null);
-  const [reports, setReports] = useState([]);
   const [date, setDate] = useState(todayISO());
-  const [form, setForm] = useState(EMPTY);
+  const [form, setForm] = useState({});
   const [saved, setSaved] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  useEffect(() => {
-    setUser(loadCurrentUser());
-    setReports(loadReports());
-  }, []);
+  const { data: me } = useMe();
+  const { data: myReports = [] } = useReports(
+    me ? { employee: me.id } : {},
+  );
+  const submit = useSubmitReport();
 
-  const myReports = useMemo(
-    () =>
-      user
-        ? [...reports]
-            .filter((r) => r.employeeId === user.id)
-            .sort((a, b) => b.date.localeCompare(a.date))
-        : [],
-    [reports, user]
+  const fields = useMemo(
+    () => (me ? getReportFields(me.department) : []),
+    [me]
+  );
+  const EMPTY = useMemo(() => buildEmpty(fields), [fields]);
+
+  const sortedReports = useMemo(
+    () => [...myReports].sort((a, b) => b.date.localeCompare(a.date)),
+    [myReports]
   );
 
   useEffect(() => {
-    if (!user) return;
-    const existing = reports.find((r) => r.employeeId === user.id && r.date === date);
-    setForm(existing ? { ...EMPTY, ...existing } : EMPTY);
+    if (!me || fields.length === 0) return;
+    const existing = myReports.find((r) => r.date === date);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setForm(existing ? { ...EMPTY, ...existing.data } : EMPTY);
     setSaved(false);
-  }, [date, user, reports]);
+  }, [date, me, myReports, fields, EMPTY]);
 
   function update(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
     setSaved(false);
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
-    if (!user) return;
-    const entry = {
-      id: `${user.id}-${date}`,
-      employeeId: user.id,
-      date,
-      ...form,
-      submittedAt: new Date().toISOString(),
-    };
-    const updated = upsertReport(entry);
-    setReports(updated);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+    if (!me) return;
+    setErrorMsg("");
+
+    const cleaned = {};
+    fields.forEach((f) => {
+      cleaned[f.key] = form[f.key] || "";
+    });
+
+    try {
+      await submit.mutateAsync({ date, data: cleaned });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      setErrorMsg(err.message || "Failed to save report");
+    }
   }
 
   function clearForm() {
     setForm(EMPTY);
   }
 
-  if (!user) return null;
+  if (!me) return null;
 
-  const dept = departmentById(user.department);
-  const roleLabel = user.role === "hr" ? "HR" : dept?.name;
+  const dept = me.department;
+  const roleLabel = me.role === "hr" ? "HR" : dept?.name;
+
+  const lastIdx = fields.length - 1;
+  const lastIsOdd = fields.length % 2 === 1 && fields.length > 1;
 
   return (
     <div className="space-y-5">
@@ -85,14 +86,10 @@ export default function MyReportPage() {
         <div aria-hidden className="absolute inset-0 bg-dot-pattern opacity-40" />
         <div className="relative flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            {/* <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-orange-700 ring-1 ring-orange-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-              My Report
-            </span> */}
             <div className="leading-tight">
               <h1 className="text-base font-semibold tracking-tight text-zinc-900">My Daily Report</h1>
               <p className="text-[11px] text-zinc-600">
-                <span className="font-medium text-zinc-800">{user.name}</span> · {roleLabel} · {user.title}
+                <span className="font-medium text-zinc-800">{fullName(me)}</span> · {roleLabel} · {me.title}
               </p>
             </div>
           </div>
@@ -112,8 +109,13 @@ export default function MyReportPage() {
         </div>
       </header>
 
+      {errorMsg && (
+        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
+          {errorMsg}
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="overflow-hidden rounded-lg border border-orange-100 surface-card">
-        {/* Branded form header */}
         <div className="flex items-center gap-2 border-b border-orange-100 bg-brand-strip px-4 py-2.5">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-orange-600 text-white">
             <DocIcon className="h-3.5 w-3.5" />
@@ -124,14 +126,14 @@ export default function MyReportPage() {
         </div>
 
         <div className="grid grid-cols-1 divide-y divide-zinc-100 bg-stone-50/40 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-          {REPORT_FIELDS.map((field, i) => (
+          {fields.map((field, i) => (
             <Field
               key={field.key}
               index={i}
               label={field.label}
-              value={form[field.key]}
+              value={form[field.key] || ""}
               onChange={(v) => update(field.key, v)}
-              span={i === 4 ? "lg:col-span-2 lg:border-t lg:border-zinc-100" : ""}
+              span={lastIsOdd && i === lastIdx ? "lg:col-span-2 lg:border-t lg:border-zinc-100" : ""}
             />
           ))}
         </div>
@@ -139,7 +141,7 @@ export default function MyReportPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-orange-100 bg-brand-strip px-4 py-3">
           <p className="flex items-center gap-1.5 text-[11px] text-zinc-600">
             <InfoIcon className="h-3.5 w-3.5 text-orange-600" />
-            Reports save locally to your browser. Submitting overwrites any previous entry for this date.
+            Reports save to the server. Submitting overwrites any previous entry for this date.
           </p>
           <div className="flex items-center gap-2">
             {saved && (
@@ -157,9 +159,10 @@ export default function MyReportPage() {
             </button>
             <button
               type="submit"
-              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700"
+              disabled={submit.isPending}
+              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700 disabled:opacity-60"
             >
-              Submit report
+              {submit.isPending ? "Saving…" : "Submit report"}
             </button>
           </div>
         </div>
@@ -173,28 +176,26 @@ export default function MyReportPage() {
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
               <Table.Th>Date</Table.Th>
-              <Table.Th>Work Done</Table.Th>
-              <Table.Th>In Progress</Table.Th>
-              <Table.Th>Priorities</Table.Th>
-              <Table.Th>Challenges</Table.Th>
-              <Table.Th>Other</Table.Th>
+              {fields.map((f) => (
+                <Table.Th key={f.key}>{f.label}</Table.Th>
+              ))}
             </Table.Row>
           </Table.Head>
           <Table.Body>
-            {myReports.length === 0 ? (
-              <Table.Empty colSpan={7} message="No reports yet. Fill in the form above to get started." />
+            {sortedReports.length === 0 ? (
+              <Table.Empty colSpan={2 + fields.length} message="No reports yet. Fill in the form above to get started." />
             ) : (
-              myReports.map((r, i) => (
+              sortedReports.map((r, i) => (
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                     {formatPretty(r.date)}
                   </Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workDone || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workInProgress || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.upcomingPriorities || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.challenges || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.otherUpdate || "—"}</Table.Td>
+                  {fields.map((f) => (
+                    <Table.Td key={f.key} className="align-top text-zinc-700">
+                      {r.data?.[f.key] || "—"}
+                    </Table.Td>
+                  ))}
                 </Table.Row>
               ))
             )}

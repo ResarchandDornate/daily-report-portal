@@ -5,28 +5,33 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
   buildSummaryText,
-  departmentById,
   downloadFile,
-  employeeById,
   formatPretty,
+  fullName,
   getMonthRange,
+  getReportFields,
   getWeekRange,
-  loadReports,
   reportsToCSV,
   shareViaEmail,
   shareViaWhatsApp,
   shiftDays,
   todayISO,
 } from "@/lib/data";
+import { useEmployee, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function EmployeePage() {
   const params = useParams();
-  const empId = params.empId;
-  const employee = employeeById(empId);
-  const dept = employee ? departmentById(employee.department) : null;
+  const empId = Number(params.empId);
 
-  const [allReports, setAllReports] = useState([]);
+  const { data: employee, isLoading: empLoading, isError: empError } = useEmployee(empId);
+  const { data: myReports = [] } = useReports(
+    Number.isFinite(empId) ? { employee: empId } : {},
+  );
+
+  const dept = employee?.department;
+  const empFields = useMemo(() => getReportFields(dept), [dept]);
+
   const [showFilter, setShowFilter] = useState(false);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState(todayISO());
@@ -36,23 +41,15 @@ export default function EmployeePage() {
   const [ceoPhone, setCeoPhone] = useState("");
 
   useEffect(() => {
-    setAllReports(loadReports());
-  }, []);
-
-  const myReports = useMemo(
-    () => allReports.filter((r) => r.employeeId === empId),
-    [allReports, empId]
-  );
-
-  useEffect(() => {
     if (!start && myReports.length) {
       const earliest = myReports.reduce((min, r) => (r.date < min ? r.date : min), myReports[0].date);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setStart(earliest);
     }
   }, [myReports, start]);
 
   const filtered = useMemo(() => {
-    return myReports
+    return [...myReports]
       .filter((r) => (start ? r.date >= start : true))
       .filter((r) => (end ? r.date <= end : true))
       .sort((a, b) => b.date.localeCompare(a.date));
@@ -79,7 +76,8 @@ export default function EmployeePage() {
     else range = { start, end };
 
     const reportsForRange = myReports.filter((r) => r.date >= range.start && r.date <= range.end);
-    const text = buildSummaryText(reportsForRange, range, "CEO");
+    const usersById = { [employee.id]: employee };
+    const text = buildSummaryText(reportsForRange, range, { usersById, audience: "CEO" });
     setSummary({ kind, range, text, reports: reportsForRange });
     setShareOpen(false);
     setTimeout(() => {
@@ -89,14 +87,14 @@ export default function EmployeePage() {
   }
 
   function downloadSummaryCSV() {
-    if (!summary) return;
-    const csv = reportsToCSV(summary.reports);
-    downloadFile(`${employee.name.replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.csv`, csv, "text/csv");
+    if (!summary || !employee) return;
+    const csv = reportsToCSV(summary.reports, { usersById: { [employee.id]: employee } });
+    downloadFile(`${fullName(employee).replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.csv`, csv, "text/csv");
   }
 
   function downloadSummaryText() {
-    if (!summary) return;
-    downloadFile(`${employee.name.replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.txt`, summary.text, "text/plain");
+    if (!summary || !employee) return;
+    downloadFile(`${fullName(employee).replace(/\s+/g, "_")}_${summary.range.start}_to_${summary.range.end}.txt`, summary.text, "text/plain");
   }
 
   function copySummary() {
@@ -108,7 +106,7 @@ export default function EmployeePage() {
     if (!summary || !employee) return;
     shareViaEmail({
       to: ceoEmail,
-      subject: `${employee.name} — ${summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Report"} Summary (${formatPretty(summary.range.start)} – ${formatPretty(summary.range.end)})`,
+      subject: `${fullName(employee)} — ${summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Report"} Summary (${formatPretty(summary.range.start)} – ${formatPretty(summary.range.end)})`,
       body: summary.text,
     });
   }
@@ -131,11 +129,19 @@ export default function EmployeePage() {
   function setLast7() { setStart(shiftDays(todayISO(), -6)); setEnd(todayISO()); }
   function setLast30() { setStart(shiftDays(todayISO(), -29)); setEnd(todayISO()); }
 
-  if (!employee) {
+  if (empLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
+      </div>
+    );
+  }
+
+  if (empError || !employee) {
     return (
       <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-900">
         <h2 className="text-sm font-semibold">Employee not found</h2>
-        <p className="mt-1 text-xs">No employee with id <code className="rounded bg-rose-100 px-1">{empId}</code>.</p>
+        <p className="mt-1 text-xs">No employee with id <code className="rounded bg-rose-100 px-1">{params.empId}</code>.</p>
       </div>
     );
   }
@@ -146,11 +152,15 @@ export default function EmployeePage() {
       <nav className="flex items-center gap-1.5 text-[11px] text-zinc-500">
         <Link href="/dashboard" className="hover:text-orange-700">Overview</Link>
         <span>/</span>
-        <Link href={`/dashboard/department/${employee.department}`} className="hover:text-orange-700">
-          {dept?.name}
-        </Link>
-        <span>/</span>
-        <span className="font-medium text-zinc-800">{employee.name}</span>
+        {dept && (
+          <>
+            <Link href={`/dashboard/department/${dept.slug}`} className="hover:text-orange-700">
+              {dept.name}
+            </Link>
+            <span>/</span>
+          </>
+        )}
+        <span className="font-medium text-zinc-800">{fullName(employee)}</span>
       </nav>
 
       {/* Header card */}
@@ -158,13 +168,13 @@ export default function EmployeePage() {
         <div aria-hidden className="absolute inset-0 bg-dot-pattern opacity-40" />
         <div className="relative flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Avatar name={employee.name} />
+            <Avatar name={fullName(employee)} />
             <div className="leading-tight">
               <div className="flex items-center gap-1.5">
-                <h1 className="text-base font-semibold tracking-tight text-zinc-900">{employee.name}</h1>
+                <h1 className="text-base font-semibold tracking-tight text-zinc-900">{fullName(employee)}</h1>
                 <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] ${badgeBg(dept?.color)}`}>
                   <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept?.color)}`} />
-                  {dept?.name}
+                  {dept?.name || "—"}
                 </span>
                 {stats.submittedToday ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
@@ -176,7 +186,7 @@ export default function EmployeePage() {
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-[11px] text-zinc-600">{employee.title} • {employee.email}</p>
+              <p className="mt-0.5 text-[11px] text-zinc-600">{employee.title || "—"} • {employee.email}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 text-center">
@@ -251,7 +261,7 @@ export default function EmployeePage() {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 bg-orange-50 px-4 py-3">
             <div>
               <h3 className="text-sm font-semibold text-zinc-900">
-                {summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Custom"} Summary — {employee.name}
+                {summary.kind === "weekly" ? "Weekly" : summary.kind === "monthly" ? "Monthly" : "Custom"} Summary — {fullName(employee)}
               </h3>
               <p className="text-[11px] text-zinc-500">
                 {formatPretty(summary.range.start)} → {formatPretty(summary.range.end)} • {summary.reports.length} {summary.reports.length === 1 ? "report" : "reports"}
@@ -304,26 +314,22 @@ export default function EmployeePage() {
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
               <Table.Th>Date</Table.Th>
-              <Table.Th>Work Done</Table.Th>
-              <Table.Th>Work in Progress</Table.Th>
-              <Table.Th>Upcoming Priorities</Table.Th>
-              <Table.Th>Challenges / Support</Table.Th>
-              <Table.Th>Other Update</Table.Th>
+              {empFields.map((f) => (
+                <Table.Th key={f.key}>{f.label}</Table.Th>
+              ))}
             </Table.Row>
           </Table.Head>
           <Table.Body>
             {filtered.length === 0 ? (
-              <Table.Empty colSpan={7} message="No reports in this range." />
+              <Table.Empty colSpan={2 + empFields.length} message="No reports in this range." />
             ) : (
               filtered.map((r, i) => (
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPretty(r.date)}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workDone || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workInProgress || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.upcomingPriorities || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.challenges || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.otherUpdate || "—"}</Table.Td>
+                  {empFields.map((f) => (
+                    <Table.Td key={f.key} className="align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
+                  ))}
                 </Table.Row>
               ))
             )}
@@ -374,11 +380,10 @@ function ActionBtn({ children, onClick, tone = "default" }) {
   );
 }
 
-function Avatar({ name, large = false }) {
+function Avatar({ name }) {
   const initials = name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
-  const sz = large ? "h-11 w-11 text-sm" : "h-6 w-6 text-[9px]";
   return (
-    <span className={`flex shrink-0 items-center justify-center rounded-full bg-orange-600 font-semibold text-white ${sz}`}>
+    <span className="flex shrink-0 items-center justify-center rounded-full bg-orange-600 font-semibold text-white h-6 w-6 text-[9px]">
       {initials}
     </span>
   );
