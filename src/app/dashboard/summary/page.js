@@ -1,24 +1,21 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import {
-  DEPARTMENTS,
   buildSummaryText,
   downloadFile,
-  employeeById,
   formatPretty,
   getMonthRange,
   getWeekRange,
-  loadReports,
+  indexById,
   reportsToCSV,
-  reportsInRange,
   shareViaEmail,
   shareViaWhatsApp,
   todayISO,
 } from "@/lib/data";
+import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 
 export default function SummaryPage() {
-  const [reports, setReports] = useState([]);
   const [start, setStart] = useState(getWeekRange().start);
   const [end, setEnd] = useState(getWeekRange().end);
   const [dept, setDept] = useState("all");
@@ -28,9 +25,15 @@ export default function SummaryPage() {
   const [ceoEmail, setCeoEmail] = useState("ceo@ornatesolar.com");
   const [ceoPhone, setCeoPhone] = useState("");
 
-  useEffect(() => {
-    setReports(loadReports());
-  }, []);
+  const { data: departments = [] } = useDepartments();
+  const { data: employees = [] } = useEmployees();
+  const reportFilters = useMemo(
+    () => ({ start, end, ...(dept !== "all" && { department: dept }) }),
+    [start, end, dept],
+  );
+  const { data: reports = [] } = useReports(reportFilters);
+
+  const employeesById = useMemo(() => indexById(employees), [employees]);
 
   function applyPreset(kind) {
     setPreset(kind);
@@ -45,31 +48,23 @@ export default function SummaryPage() {
     }
   }
 
-  const inRange = useMemo(() => {
-    const ranged = reportsInRange(reports, start, end);
-    if (dept === "all") return ranged;
-    return ranged.filter((r) => {
-      const emp = employeeById(r.employeeId);
-      return emp && emp.department === dept;
-    });
-  }, [reports, start, end, dept]);
-
   const summaryText = useMemo(
-    () => buildSummaryText(inRange, { start, end }, audience),
-    [inRange, start, end, audience]
+    () =>
+      buildSummaryText(reports, { start, end }, { usersById: employeesById, audience }),
+    [reports, start, end, employeesById, audience]
   );
 
   const stats = useMemo(() => {
-    const employees = new Set(inRange.map((r) => r.employeeId));
+    const employeeIds = new Set(reports.map((r) => r.user_id));
     return {
-      total: inRange.length,
-      employees: employees.size,
-      challenges: inRange.filter((r) => r.challenges && r.challenges !== "—").length,
+      total: reports.length,
+      employees: employeeIds.size,
+      challenges: reports.filter((r) => r.data?.challenges && r.data.challenges !== "—").length,
     };
-  }, [inRange]);
+  }, [reports]);
 
   function downloadCSV() {
-    const csv = reportsToCSV(inRange);
+    const csv = reportsToCSV(reports, { usersById: employeesById });
     downloadFile(`summary_${start}_to_${end}.csv`, csv, "text/csv");
   }
 
@@ -150,8 +145,8 @@ export default function SummaryPage() {
           <Field label="Department">
             <select value={dept} onChange={(e) => setDept(e.target.value)} className={inputClass}>
               <option value="all">All departments</option>
-              {DEPARTMENTS.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
+              {departments.map((d) => (
+                <option key={d.slug} value={d.slug}>{d.name}</option>
               ))}
             </select>
           </Field>
@@ -231,9 +226,9 @@ export default function SummaryPage() {
           </div>
         )}
 
-        <pre className="max-h-105 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-relaxed text-zinc-700">
-{summaryText}
-        </pre>
+        <p className="max-h-105 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
+          {summaryText}
+        </p>
       </div>
     </div>
   );

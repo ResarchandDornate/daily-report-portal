@@ -1,41 +1,19 @@
 "use client";
 
-export const DEPARTMENTS = [
-  { id: "rnd", name: "R&D Team", color: "indigo" },
-  { id: "logistics", name: "Logistics", color: "amber" },
-  { id: "webdev", name: "WebDev Team", color: "emerald" },
-  { id: "sales", name: "Sales", color: "rose" },
-  { id: "finance", name: "Finance", color: "sky" },
-];
+/**
+ * Pure utilities only. No mock data, no localStorage, no department lists.
+ * All entity data comes from the backend via @/lib/queries.
+ *
+ * The helpers below understand the shape returned by the FastAPI backend:
+ *   user      = { id, username, email, first_name, last_name, role, title,
+ *                 contact_number, department: { id, slug, name, color, report_fields } | null }
+ *   report    = { id, user_id, date, data: { [fieldKey]: string }, submitted_at }
+ *   department = { id, slug, name, color, report_fields: [{ key, label }] }
+ */
 
-export const HR_USER = {
-  id: "hr-admin",
-  name: "HR Admin",
-  email: "hr@ornatesolar.com",
-  role: "hr",
-  department: "HR",
-  title: "HR Manager",
-};
+/* ---------- Defaults ---------- */
 
-export const EMPLOYEES = [
-  { id: "e1", name: "Aarav Sharma", email: "aarav@ornatesolar.com", department: "rnd", title: "Senior Engineer" },
-  { id: "e2", name: "Meera Kapoor", email: "meera@ornatesolar.com", department: "rnd", title: "R&D Lead" },
-  { id: "e3", name: "Rohan Verma", email: "rohan@ornatesolar.com", department: "rnd", title: "Engineer" },
-  { id: "e4", name: "Priya Patel", email: "priya@ornatesolar.com", department: "logistics", title: "Logistics Lead" },
-  { id: "e5", name: "Karan Mehta", email: "karan@ornatesolar.com", department: "logistics", title: "Coordinator" },
-  { id: "e6", name: "Sneha Iyer", email: "sneha@ornatesolar.com", department: "logistics", title: "Analyst" },
-  { id: "e7", name: "Vikram Singh", email: "vikram@ornatesolar.com", department: "webdev", title: "Tech Lead" },
-  { id: "e8", name: "Ananya Desai", email: "ananya@ornatesolar.com", department: "webdev", title: "Frontend Engineer" },
-  { id: "e9", name: "Rahul Joshi", email: "rahul@ornatesolar.com", department: "webdev", title: "Backend Engineer" },
-  { id: "e10", name: "Divya Nair", email: "divya@ornatesolar.com", department: "sales", title: "Sales Head" },
-  { id: "e11", name: "Arjun Reddy", email: "arjun@ornatesolar.com", department: "sales", title: "Account Executive" },
-  { id: "e12", name: "Pooja Bhatt", email: "pooja@ornatesolar.com", department: "sales", title: "Sales Associate" },
-  { id: "e13", name: "Manish Gupta", email: "manish@ornatesolar.com", department: "finance", title: "Finance Lead" },
-  { id: "e14", name: "Neha Agarwal", email: "neha@ornatesolar.com", department: "finance", title: "Accountant" },
-  { id: "e15", name: "Sanjay Khanna", email: "sanjay@ornatesolar.com", department: "finance", title: "Analyst" },
-];
-
-export const REPORT_FIELDS = [
+export const DEFAULT_REPORT_FIELDS = [
   { key: "workDone", label: "Work Done" },
   { key: "workInProgress", label: "Work in Progress" },
   { key: "upcomingPriorities", label: "Upcoming Priorities" },
@@ -79,193 +57,198 @@ export function inRange(iso, start, end) {
   return iso >= start && iso <= end;
 }
 
-/* ---------- Seed data ---------- */
+/* ---------- User / report helpers ---------- */
 
-const SEED_KEY = "drp_reports_v1";
-const USER_KEY = "drp_current_user_v1";
-
-function generateSeed() {
-  const today = todayISO();
-  const samples = [
-    {
-      workDone: "Completed module specs and shared with team.",
-      workInProgress: "Reviewing supplier datasheets.",
-      upcomingPriorities: "Begin prototype testing on Friday.",
-      challenges: "Awaiting approval on BoM revision.",
-      otherUpdate: "Attended weekly sync.",
-    },
-    {
-      workDone: "Closed 3 customer tickets and shipped fix v2.4.1.",
-      workInProgress: "Refactoring auth flow for portal.",
-      upcomingPriorities: "QA pass on dashboard module.",
-      challenges: "Need staging DB credentials.",
-      otherUpdate: "Onboarded new intern.",
-    },
-    {
-      workDone: "Reconciled April vendor invoices.",
-      workInProgress: "Drafting Q2 budget sheet.",
-      upcomingPriorities: "GST filing on 25th.",
-      challenges: "Pending PO numbers from procurement.",
-      otherUpdate: "—",
-    },
-    {
-      workDone: "Followed up with 12 leads, closed 2 deals.",
-      workInProgress: "Preparing pitch deck for Bengaluru client.",
-      upcomingPriorities: "Site visit on Thursday.",
-      challenges: "Need updated pricing sheet.",
-      otherUpdate: "CRM cleanup completed.",
-    },
-    {
-      workDone: "Coordinated 4 dispatches across north zone.",
-      workInProgress: "Tracking pending shipment to Pune.",
-      upcomingPriorities: "Inventory audit Monday.",
-      challenges: "Truck breakdown delayed Friday delivery.",
-      otherUpdate: "—",
-    },
-  ];
-  const reports = [];
-  EMPLOYEES.forEach((emp, idx) => {
-    for (let dayOffset = 1; dayOffset <= 10; dayOffset++) {
-      // skip a couple of days for variety so "missing" feature has data
-      if ((idx + dayOffset) % 7 === 0) continue;
-      const date = shiftDays(today, -dayOffset);
-      const sample = samples[(idx + dayOffset) % samples.length];
-      reports.push({
-        id: `${emp.id}-${date}`,
-        employeeId: emp.id,
-        date,
-        ...sample,
-        submittedAt: new Date().toISOString(),
-      });
-    }
-  });
-  return reports;
+export function fullName(user) {
+  if (!user) return "—";
+  const n = `${user.first_name || ""} ${user.last_name || ""}`.trim();
+  return n || user.username || user.email || "—";
 }
 
-/* ---------- localStorage ---------- */
+export function getReportFields(department) {
+  return department?.report_fields?.length ? department.report_fields : DEFAULT_REPORT_FIELDS;
+}
 
-export function loadReports() {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(SEED_KEY);
-    if (raw) return JSON.parse(raw);
-    const seed = generateSeed();
-    localStorage.setItem(SEED_KEY, JSON.stringify(seed));
-    return seed;
-  } catch {
-    return [];
+/* Build an { [id]: user } lookup map from a list. */
+export function indexById(rows = []) {
+  const map = {};
+  rows.forEach((r) => { map[r.id] = r; });
+  return map;
+}
+
+/* Build a { [slug]: department } lookup map. */
+export function indexBySlug(rows = []) {
+  const map = {};
+  rows.forEach((r) => { map[r.slug] = r; });
+  return map;
+}
+
+/* ---------- Summary + CSV ---------- */
+
+/**
+ * Build a short, narrative summary paragraph from a set of daily reports.
+ *
+ * The summary reads as flowing prose (no bullets, no headings).  It synthesises
+ * the actual values employees filled in across the chosen date range — opening
+ * sentence with scope, one sentence per department covering their key
+ * activities, and one closing sentence on challenges raised, if any.
+ *
+ * For a single employee (e.g. an employee detail page), the per-department loop
+ * naturally collapses to one sentence about that person.
+ */
+export function buildSummaryText(reports, range, opts = {}) {
+  const { usersById = {} } = opts;
+  // _audience kept for API compatibility but no longer rendered — paragraph
+  // form already implies it's a leadership-facing readout.
+
+  const startLabel = formatPretty(range.start);
+  const endLabel = formatPretty(range.end);
+
+  if (!reports || reports.length === 0) {
+    return `No reports were submitted between ${startLabel} and ${endLabel}.`;
   }
-}
 
-export function saveReports(reports) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(SEED_KEY, JSON.stringify(reports));
-}
-
-export function upsertReport(report) {
-  const all = loadReports();
-  const idx = all.findIndex((r) => r.id === report.id);
-  if (idx >= 0) all[idx] = { ...all[idx], ...report };
-  else all.push(report);
-  saveReports(all);
-  return all;
-}
-
-export function loadCurrentUser() {
-  if (typeof window === "undefined") return HR_USER;
-  try {
-    const raw = localStorage.getItem(USER_KEY);
-    return raw ? JSON.parse(raw) : HR_USER;
-  } catch {
-    return HR_USER;
-  }
-}
-
-export function saveCurrentUser(user) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(USER_KEY, JSON.stringify(user));
-}
-
-export function clearCurrentUser() {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(USER_KEY);
-}
-
-/* ---------- Lookup helpers ---------- */
-
-export function employeeById(id) {
-  if (id === HR_USER.id) return HR_USER;
-  return EMPLOYEES.find((e) => e.id === id);
-}
-
-export function departmentById(id) {
-  return DEPARTMENTS.find((d) => d.id === id);
-}
-
-export function reportsInRange(reports, start, end) {
-  return reports.filter((r) => inRange(r.date, start, end));
-}
-
-export function missingToday(reports, employees = EMPLOYEES, dateIso = todayISO()) {
-  const submittedIds = new Set(reports.filter((r) => r.date === dateIso).map((r) => r.employeeId));
-  return employees.filter((e) => !submittedIds.has(e.id));
-}
-
-/* ---------- Summary + export ---------- */
-
-export function buildSummaryText(reports, range, audience = "CEO") {
-  const sorted = [...reports].sort((a, b) => a.date.localeCompare(b.date));
+  // Group reports by department so we can write one sentence per dept.
   const byDept = {};
-  sorted.forEach((r) => {
-    const emp = employeeById(r.employeeId);
-    if (!emp) return;
-    const dept = departmentById(emp.department)?.name || emp.department;
-    if (!byDept[dept]) byDept[dept] = {};
-    if (!byDept[dept][emp.id]) byDept[dept][emp.id] = { emp, items: [] };
-    byDept[dept][emp.id].items.push(r);
-  });
-
-  const lines = [];
-  lines.push(`Daily Report Summary — ${formatPretty(range.start)} to ${formatPretty(range.end)}`);
-  lines.push(`Prepared for: ${audience}`);
-  lines.push("");
-
-  Object.keys(byDept)
-    .sort()
-    .forEach((dept) => {
-      lines.push(`=== ${dept} ===`);
-      Object.values(byDept[dept]).forEach(({ emp, items }) => {
-        lines.push(`\n${emp.name} (${emp.title})`);
-        items.forEach((r) => {
-          lines.push(`  ${formatPretty(r.date)}`);
-          if (r.workDone) lines.push(`    • Done: ${r.workDone}`);
-          if (r.workInProgress) lines.push(`    • In progress: ${r.workInProgress}`);
-          if (r.upcomingPriorities) lines.push(`    • Priorities: ${r.upcomingPriorities}`);
-          if (r.challenges) lines.push(`    • Challenges: ${r.challenges}`);
-          if (r.otherUpdate && r.otherUpdate !== "—") lines.push(`    • Other: ${r.otherUpdate}`);
-        });
-      });
-      lines.push("");
-    });
-
-  if (Object.keys(byDept).length === 0) {
-    lines.push("No reports found for the selected range.");
+  const employeeIds = new Set();
+  for (const r of reports) {
+    const user = usersById[r.user_id];
+    if (!user) continue;
+    employeeIds.add(user.id);
+    const deptName = user.department?.name || "—";
+    if (!byDept[deptName]) byDept[deptName] = { reports: [], people: new Set() };
+    byDept[deptName].reports.push(r);
+    byDept[deptName].people.add(user.id);
   }
 
-  return lines.join("\n");
+  const sentences = [];
+
+  const totalReports = reports.length;
+  const peopleCount = employeeIds.size;
+  const deptNames = Object.keys(byDept).sort();
+
+  // ─── Single-employee path ────────────────────────────────────────────
+  // Skip the "X submitted N reports" opener — the surrounding card already
+  // shows that ("Weekly Summary — Abhishek Jadon · 6 reports").  Dive straight
+  // into one sentence per report column.
+  if (peopleCount === 1 && reports[0]) {
+    const onlyUser = usersById[reports[0].user_id];
+    const dept = onlyUser?.department;
+    // Cap to a few items per field so the paragraph stays readable.  The
+    // "Daily reports" table beneath the summary card already shows every entry,
+    // so this paragraph just needs to convey the gist.
+    const ITEMS_PER_FIELD = 3;
+    const fields = getReportFields(dept);
+    for (const f of fields) {
+      if (f.key === "challenges" || f.key === "remarks") continue; // covered separately at the end
+      const values = new Set();
+      for (const r of reports) {
+        const v = r.data?.[f.key];
+        if (typeof v !== "string") continue;
+        const t = v.trim();
+        if (t && t !== "—" && t !== "-") values.add(t);
+      }
+      if (values.size === 0) continue;
+      const picked = [...values].slice(0, ITEMS_PER_FIELD);
+      sentences.push(`${f.label}: ${_joinSentenceItems(picked)}.`);
+    }
+  } else {
+    // ─── Multi-employee path ───────────────────────────────────────────
+    const deptList = _joinList(deptNames);
+    sentences.push(
+      `Between ${startLabel} and ${endLabel}, ${peopleCount} ${peopleCount === 1 ? "employee" : "employees"} ` +
+      `across ${deptNames.length} ${deptNames.length === 1 ? "department" : "departments"} ` +
+      `(${deptList}) submitted ${totalReports} daily ${totalReports === 1 ? "report" : "reports"}.`
+    );
+
+    // For company-wide summaries we only cover the top 5 departments by volume
+    // to keep the paragraph readable, and round off with a count of the rest.
+    const TOP_DEPTS = 5;
+    const ACTIVITIES_PER_DEPT = 3;
+    const rankedDepts = [...deptNames].sort(
+      (a, b) => byDept[b].reports.length - byDept[a].reports.length,
+    );
+    const topDepts = rankedDepts.slice(0, TOP_DEPTS);
+    const restDepts = rankedDepts.slice(TOP_DEPTS);
+
+    for (const deptName of topDepts) {
+      const data = byDept[deptName];
+      const activities = new Set();
+      for (const r of data.reports) {
+        for (const [key, val] of Object.entries(r.data || {})) {
+          if (key === "challenges" || key === "remarks") continue;
+          if (typeof val !== "string") continue;
+          const trimmed = val.trim();
+          if (trimmed && trimmed !== "—" && trimmed !== "-") activities.add(trimmed);
+        }
+      }
+      if (activities.size === 0) continue;
+
+      const picked = [...activities].slice(0, ACTIVITIES_PER_DEPT);
+      const stat = ` (${data.people.size} ${data.people.size === 1 ? "person" : "people"}, ${data.reports.length} ${data.reports.length === 1 ? "report" : "reports"})`;
+      sentences.push(`${deptName}${stat}: ${_joinSentenceItems(picked)}.`);
+    }
+
+    if (restDepts.length > 0) {
+      sentences.push(`${restDepts.length} other ${restDepts.length === 1 ? "department" : "departments"} (${_joinList(restDepts)}) also reported in.`);
+    }
+  }
+
+  // Closing sentence — challenges and free-text remarks.
+  const notes = new Set();
+  for (const r of reports) {
+    for (const k of ["challenges", "remarks"]) {
+      const v = r.data?.[k];
+      if (typeof v !== "string") continue;
+      const t = v.trim();
+      if (t && t !== "—" && t !== "-") notes.add(t);
+    }
+  }
+  if (notes.size > 0) {
+    // Single-employee summaries get every note (they're already focused).
+    // Multi-employee summaries cap to 3 to keep the paragraph tight.
+    const picked = peopleCount === 1 ? [...notes] : [...notes].slice(0, 3);
+    const label = peopleCount === 1 ? "Notes & challenges" : "Challenges raised";
+    sentences.push(`${label}: ${_joinSentenceItems(picked)}.`);
+  }
+
+  return sentences.join(" ");
 }
 
-export function reportsToCSV(reports) {
-  const header = [
-    "Date",
-    "Employee",
-    "Department",
-    "Work Done",
-    "Work in Progress",
-    "Upcoming Priorities",
-    "Challenges Faced/Support Needed",
-    "Other Update",
-  ];
+/* Joins items with commas + "and" before the last one. */
+function _joinList(items) {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+/* Joins free-text items with commas to read like natural prose.  Strips any
+ * trailing periods/semicolons/whitespace from each item so the joined output
+ * doesn't have double punctuation.
+ */
+function _joinSentenceItems(items) {
+  return items
+    .map((s) => s.replace(/[;.\s]+$/, ""))
+    .join(", ");
+}
+
+export function reportsToCSV(reports, opts = {}) {
+  const { usersById = {} } = opts;
+  const keyOrder = [];
+  const keyLabels = {};
+  reports.forEach((r) => {
+    const user = usersById[r.user_id];
+    const fields = user ? getReportFields(user.department) : DEFAULT_REPORT_FIELDS;
+    fields.forEach((f) => {
+      if (!(f.key in keyLabels)) {
+        keyOrder.push(f.key);
+        keyLabels[f.key] = f.label;
+      }
+    });
+  });
+
+  const header = ["Date", "Employee", "Department", ...keyOrder.map((k) => keyLabels[k])];
   const escape = (v) => {
     const s = (v ?? "").toString();
     if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -274,23 +257,21 @@ export function reportsToCSV(reports) {
   const rows = [...reports]
     .sort((a, b) => a.date.localeCompare(b.date))
     .map((r) => {
-      const emp = employeeById(r.employeeId);
-      const dept = emp ? departmentById(emp.department)?.name || emp.department : "—";
+      const user = usersById[r.user_id];
+      const deptName = user?.department?.name || "—";
       return [
         r.date,
-        emp?.name || r.employeeId,
-        dept,
-        r.workDone,
-        r.workInProgress,
-        r.upcomingPriorities,
-        r.challenges,
-        r.otherUpdate,
+        user ? fullName(user) : `User #${r.user_id}`,
+        deptName,
+        ...keyOrder.map((k) => r.data?.[k] ?? ""),
       ]
         .map(escape)
         .join(",");
     });
   return [header.join(","), ...rows].join("\n");
 }
+
+/* ---------- Browser utils ---------- */
 
 export function downloadFile(filename, content, mime = "text/plain") {
   if (typeof window === "undefined") return;

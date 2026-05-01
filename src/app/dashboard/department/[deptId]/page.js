@@ -1,41 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import {
-  EMPLOYEES,
-  departmentById,
-  formatPretty,
-  loadReports,
-  todayISO,
-} from "@/lib/data";
+import { formatPretty, fullName, todayISO } from "@/lib/data";
+import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function DepartmentPage() {
   const params = useParams();
-  const deptId = params.deptId;
-  const dept = departmentById(deptId);
-  const [reports, setReports] = useState([]);
+  const slug = params.deptId; // route param now carries the slug
+
+  const { data: departments = [], isLoading: deptsLoading } = useDepartments();
+  const dept = departments.find((d) => d.slug === slug);
+
+  const { data: employees = [] } = useEmployees({ department: slug });
+  const { data: reports = [] } = useReports({ department: slug });
+
   const [query, setQuery] = useState("");
-
-  useEffect(() => {
-    setReports(loadReports());
-  }, []);
-
-  const employees = useMemo(
-    () => EMPLOYEES.filter((e) => e.department === deptId),
-    [deptId]
-  );
-
   const today = todayISO();
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return employees
       .map((emp) => {
-        const empReports = reports.filter((r) => r.employeeId === emp.id);
-        const last = empReports.sort((a, b) => b.date.localeCompare(a.date))[0];
+        const empReports = reports.filter((r) => r.user_id === emp.id);
+        const last = [...empReports].sort((a, b) => b.date.localeCompare(a.date))[0];
         const submittedToday = empReports.some((r) => r.date === today);
         return {
           emp,
@@ -47,19 +37,27 @@ export default function DepartmentPage() {
       .filter(({ emp }) => {
         if (!q) return true;
         return (
-          emp.name.toLowerCase().includes(q) ||
-          emp.title.toLowerCase().includes(q) ||
-          emp.email.toLowerCase().includes(q)
+          fullName(emp).toLowerCase().includes(q) ||
+          (emp.title || "").toLowerCase().includes(q) ||
+          (emp.email || "").toLowerCase().includes(q)
         );
       });
   }, [employees, reports, today, query]);
+
+  if (deptsLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
+      </div>
+    );
+  }
 
   if (!dept) {
     return (
       <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-rose-900">
         <h2 className="text-sm font-semibold">Department not found</h2>
         <p className="mt-1 text-xs">
-          The department <code className="rounded bg-rose-100 px-1">{deptId}</code> does not exist.
+          The department <code className="rounded bg-rose-100 px-1">{slug}</code> does not exist.
         </p>
       </div>
     );
@@ -129,11 +127,11 @@ export default function DepartmentPage() {
                     href={`/dashboard/employee/${emp.id}`}
                     className="flex items-center gap-2 text-zinc-900"
                   >
-                    <Avatar name={emp.name} />
-                    <span className="text-xs font-medium hover:text-orange-700">{emp.name}</span>
+                    <Avatar name={fullName(emp)} />
+                    <span className="text-xs font-medium hover:text-orange-700">{fullName(emp)}</span>
                   </Link>
                 </Table.Td>
-                <Table.Td className="align-top text-zinc-700">{emp.title}</Table.Td>
+                <Table.Td className="align-top text-zinc-700">{emp.title || "—"}</Table.Td>
                 <Table.Td className="align-top text-zinc-600">{emp.email}</Table.Td>
                 <Table.Td className="align-top">
                   {submittedToday ? (

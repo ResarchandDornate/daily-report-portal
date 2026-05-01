@@ -2,38 +2,50 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  DEPARTMENTS,
-  EMPLOYEES,
-  departmentById,
   downloadFile,
-  employeeById,
   formatPretty,
-  loadReports,
+  fullName,
+  getReportFields,
+  indexById,
+  indexBySlug,
   reportsToCSV,
   shiftDays,
   todayISO,
 } from "@/lib/data";
+import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function ReportsPage() {
-  const [reports, setReports] = useState([]);
   const [dept, setDept] = useState("all");
   const [employeeId, setEmployeeId] = useState("all");
   const [start, setStart] = useState(shiftDays(todayISO(), -13));
   const [end, setEnd] = useState(todayISO());
   const [query, setQuery] = useState("");
 
-  useEffect(() => {
-    setReports(loadReports());
-  }, []);
+  const { data: departments = [] } = useDepartments();
+  const { data: allEmployees = [] } = useEmployees();
+  const reportFilters = useMemo(
+    () => ({
+      start,
+      end,
+      ...(dept !== "all" && { department: dept }),
+      ...(employeeId !== "all" && { employee: Number(employeeId) }),
+    }),
+    [start, end, dept, employeeId],
+  );
+  const { data: reports = [] } = useReports(reportFilters);
+
+  const employeesById = useMemo(() => indexById(allEmployees), [allEmployees]);
+  const deptsBySlug = useMemo(() => indexBySlug(departments), [departments]);
 
   const employeeOptions = useMemo(
-    () => (dept === "all" ? EMPLOYEES : EMPLOYEES.filter((e) => e.department === dept)),
-    [dept]
+    () => (dept === "all" ? allEmployees : allEmployees.filter((e) => e.department?.slug === dept)),
+    [dept, allEmployees]
   );
 
   useEffect(() => {
-    if (employeeId !== "all" && !employeeOptions.some((e) => e.id === employeeId)) {
+    if (employeeId !== "all" && !employeeOptions.some((e) => String(e.id) === String(employeeId))) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setEmployeeId("all");
     }
   }, [employeeOptions, employeeId]);
@@ -41,31 +53,23 @@ export default function ReportsPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return reports
-      .filter((r) => r.date >= start && r.date <= end)
       .filter((r) => {
-        const emp = employeeById(r.employeeId);
-        if (!emp) return false;
-        if (dept !== "all" && emp.department !== dept) return false;
-        if (employeeId !== "all" && emp.id !== employeeId) return false;
         if (!q) return true;
+        const emp = employeesById[r.user_id];
         const blob = [
-          emp.name,
-          emp.title,
-          r.workDone,
-          r.workInProgress,
-          r.upcomingPriorities,
-          r.challenges,
-          r.otherUpdate,
+          emp ? fullName(emp) : "",
+          emp?.title || "",
+          ...Object.values(r.data || {}),
         ]
           .join(" ")
           .toLowerCase();
         return blob.includes(q);
       })
       .sort((a, b) => b.date.localeCompare(a.date));
-  }, [reports, dept, employeeId, start, end, query]);
+  }, [reports, query, employeesById]);
 
   function exportCSV() {
-    const csv = reportsToCSV(filtered);
+    const csv = reportsToCSV(filtered, { usersById: employeesById });
     const filename = `daily-reports_${start}_to_${end}.csv`;
     downloadFile(filename, csv, "text/csv");
   }
@@ -102,8 +106,8 @@ export default function ReportsPage() {
           <FilterField label="Department">
             <select value={dept} onChange={(e) => setDept(e.target.value)} className={inputClass}>
               <option value="all">All departments</option>
-              {DEPARTMENTS.map((d) => (
-                <option key={d.id} value={d.id}>{d.name}</option>
+              {departments.map((d) => (
+                <option key={d.slug} value={d.slug}>{d.name}</option>
               ))}
             </select>
           </FilterField>
@@ -112,7 +116,7 @@ export default function ReportsPage() {
             <select value={employeeId} onChange={(e) => setEmployeeId(e.target.value)} className={inputClass}>
               <option value="all">All employees</option>
               {employeeOptions.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
+                <option key={e.id} value={e.id}>{fullName(e)}</option>
               ))}
             </select>
           </FilterField>
@@ -138,54 +142,97 @@ export default function ReportsPage() {
       </div>
 
       {/* Table */}
-      <Table maxHeight={520}>
-        <Table.Head>
-          <Table.Row>
-            <Table.Th className="w-12 text-center">#</Table.Th>
-            <Table.Th>Date</Table.Th>
-            <Table.Th>Employee</Table.Th>
-            <Table.Th>Department</Table.Th>
-            <Table.Th>Work Done</Table.Th>
-            <Table.Th>Work in Progress</Table.Th>
-            <Table.Th>Upcoming Priorities</Table.Th>
-            <Table.Th>Challenges / Support</Table.Th>
-            <Table.Th>Other Update</Table.Th>
-          </Table.Row>
-        </Table.Head>
-        <Table.Body>
-          {filtered.length === 0 ? (
-            <Table.Empty colSpan={9} message="No reports match the current filters." />
-          ) : (
-            filtered.map((r, i) => {
-              const emp = employeeById(r.employeeId);
-              const d = emp ? departmentById(emp.department) : null;
-              return (
-                <Table.Row key={r.id}>
-                  <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
-                  <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
-                    {formatPretty(r.date)}
-                  </Table.Td>
-                  <Table.Td className="align-top">
-                    <div className="text-xs font-medium text-zinc-900">{emp?.name || r.employeeId}</div>
-                    <div className="text-[10px] text-zinc-500">{emp?.title}</div>
-                  </Table.Td>
-                  <Table.Td className="align-top">
-                    <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${badgeBg(d?.color)}`}>
-                      <span className={`h-1.5 w-1.5 rounded-full ${dotBg(d?.color)}`} />
-                      {d?.name || "—"}
-                    </span>
-                  </Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workDone || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.workInProgress || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.upcomingPriorities || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.challenges || "—"}</Table.Td>
-                  <Table.Td className="align-top text-zinc-700">{r.otherUpdate || "—"}</Table.Td>
+      {dept === "all" ? (
+        <Table maxHeight={520}>
+          <Table.Head>
+            <Table.Row>
+              <Table.Th className="w-12 text-center">#</Table.Th>
+              <Table.Th>Date</Table.Th>
+              <Table.Th>Employee</Table.Th>
+              <Table.Th>Department</Table.Th>
+              <Table.Th>Summary</Table.Th>
+            </Table.Row>
+          </Table.Head>
+          <Table.Body>
+            {filtered.length === 0 ? (
+              <Table.Empty colSpan={5} message="No reports match the current filters." />
+            ) : (
+              filtered.map((r, i) => {
+                const emp = employeesById[r.user_id];
+                const d = emp?.department;
+                const fields = emp ? getReportFields(emp.department) : [];
+                const summary = fields
+                  .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
+                  .filter(Boolean)
+                  .slice(0, 2)
+                  .join("  ·  ") || "—";
+                return (
+                  <Table.Row key={r.id}>
+                    <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                    <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
+                      {formatPretty(r.date)}
+                    </Table.Td>
+                    <Table.Td className="align-top">
+                      <div className="text-xs font-medium text-zinc-900">{emp ? fullName(emp) : `User #${r.user_id}`}</div>
+                      <div className="text-[10px] text-zinc-500">{emp?.title || ""}</div>
+                    </Table.Td>
+                    <Table.Td className="align-top">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] ${badgeBg(d?.color)}`}>
+                        <span className={`h-1.5 w-1.5 rounded-full ${dotBg(d?.color)}`} />
+                        {d?.name || "—"}
+                      </span>
+                    </Table.Td>
+                    <Table.Td className="align-top text-zinc-700">{summary}</Table.Td>
+                  </Table.Row>
+                );
+              })
+            )}
+          </Table.Body>
+        </Table>
+      ) : (
+        (() => {
+          const deptObj = deptsBySlug[dept];
+          const deptFields = getReportFields(deptObj);
+          return (
+            <Table maxHeight={520}>
+              <Table.Head>
+                <Table.Row>
+                  <Table.Th className="w-12 text-center">#</Table.Th>
+                  <Table.Th>Date</Table.Th>
+                  <Table.Th>Employee</Table.Th>
+                  {deptFields.map((f) => (
+                    <Table.Th key={f.key}>{f.label}</Table.Th>
+                  ))}
                 </Table.Row>
-              );
-            })
-          )}
-        </Table.Body>
-      </Table>
+              </Table.Head>
+              <Table.Body>
+                {filtered.length === 0 ? (
+                  <Table.Empty colSpan={3 + deptFields.length} message="No reports match the current filters." />
+                ) : (
+                  filtered.map((r, i) => {
+                    const emp = employeesById[r.user_id];
+                    return (
+                      <Table.Row key={r.id}>
+                        <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                        <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
+                          {formatPretty(r.date)}
+                        </Table.Td>
+                        <Table.Td className="align-top">
+                          <div className="text-xs font-medium text-zinc-900">{emp ? fullName(emp) : `User #${r.user_id}`}</div>
+                          <div className="text-[10px] text-zinc-500">{emp?.title || ""}</div>
+                        </Table.Td>
+                        {deptFields.map((f) => (
+                          <Table.Td key={f.key} className="align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
+                        ))}
+                      </Table.Row>
+                    );
+                  })
+                )}
+              </Table.Body>
+            </Table>
+          );
+        })()
+      )}
     </div>
   );
 }
