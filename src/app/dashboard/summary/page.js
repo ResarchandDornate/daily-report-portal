@@ -226,9 +226,9 @@ export default function SummaryPage() {
           </div>
         )}
 
-        <pre className="max-h-105 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-relaxed text-zinc-700">
-{summaryText}
-        </pre>
+        <p className="max-h-105 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
+          {summaryText}
+        </p>
       </div>
     </div>
   );

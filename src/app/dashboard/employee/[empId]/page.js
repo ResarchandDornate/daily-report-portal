@@ -295,9 +295,9 @@ export default function EmployeePage() {
               </div>
             </div>
           )}
-          <pre className="max-h-95 overflow-auto whitespace-pre-wrap p-4 font-mono text-[11px] leading-relaxed text-zinc-700">
-{summary.text}
-          </pre>
+          <p className="max-h-95 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
+            {summary.text}
+          </p>
         </div>
       )}
 

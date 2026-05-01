@@ -85,46 +85,152 @@ export function indexBySlug(rows = []) {
 
 /* ---------- Summary + CSV ---------- */
 
+/**
+ * Build a short, narrative summary paragraph from a set of daily reports.
+ *
+ * The summary reads as flowing prose (no bullets, no headings).  It synthesises
+ * the actual values employees filled in across the chosen date range — opening
+ * sentence with scope, one sentence per department covering their key
+ * activities, and one closing sentence on challenges raised, if any.
+ *
+ * For a single employee (e.g. an employee detail page), the per-department loop
+ * naturally collapses to one sentence about that person.
+ */
 export function buildSummaryText(reports, range, opts = {}) {
-  const { usersById = {}, audience = "CEO" } = opts;
-  const sorted = [...reports].sort((a, b) => a.date.localeCompare(b.date));
-  const byDept = {};
-  sorted.forEach((r) => {
-    const user = usersById[r.user_id];
-    if (!user) return;
-    const deptName = user.department?.name || "—";
-    if (!byDept[deptName]) byDept[deptName] = {};
-    if (!byDept[deptName][user.id]) byDept[deptName][user.id] = { user, items: [] };
-    byDept[deptName][user.id].items.push(r);
-  });
+  const { usersById = {} } = opts;
+  // _audience kept for API compatibility but no longer rendered — paragraph
+  // form already implies it's a leadership-facing readout.
 
-  const lines = [];
-  lines.push(`Daily Report Summary — ${formatPretty(range.start)} to ${formatPretty(range.end)}`);
-  lines.push(`Prepared for: ${audience}`);
-  lines.push("");
+  const startLabel = formatPretty(range.start);
+  const endLabel = formatPretty(range.end);
 
-  Object.keys(byDept)
-    .sort()
-    .forEach((deptName) => {
-      lines.push(`=== ${deptName} ===`);
-      Object.values(byDept[deptName]).forEach(({ user, items }) => {
-        const fields = getReportFields(user.department);
-        lines.push(`\n${fullName(user)} (${user.title || "—"})`);
-        items.forEach((r) => {
-          lines.push(`  ${formatPretty(r.date)}`);
-          fields.forEach((f) => {
-            const v = r.data?.[f.key];
-            if (v && v !== "—") lines.push(`    • ${f.label}: ${v}`);
-          });
-        });
-      });
-      lines.push("");
-    });
-
-  if (Object.keys(byDept).length === 0) {
-    lines.push("No reports found for the selected range.");
+  if (!reports || reports.length === 0) {
+    return `No reports were submitted between ${startLabel} and ${endLabel}.`;
   }
-  return lines.join("\n");
+
+  // Group reports by department so we can write one sentence per dept.
+  const byDept = {};
+  const employeeIds = new Set();
+  for (const r of reports) {
+    const user = usersById[r.user_id];
+    if (!user) continue;
+    employeeIds.add(user.id);
+    const deptName = user.department?.name || "—";
+    if (!byDept[deptName]) byDept[deptName] = { reports: [], people: new Set() };
+    byDept[deptName].reports.push(r);
+    byDept[deptName].people.add(user.id);
+  }
+
+  const sentences = [];
+
+  const totalReports = reports.length;
+  const peopleCount = employeeIds.size;
+  const deptNames = Object.keys(byDept).sort();
+
+  // ─── Single-employee path ────────────────────────────────────────────
+  // Skip the "X submitted N reports" opener — the surrounding card already
+  // shows that ("Weekly Summary — Abhishek Jadon · 6 reports").  Dive straight
+  // into one sentence per report column.
+  if (peopleCount === 1 && reports[0]) {
+    const onlyUser = usersById[reports[0].user_id];
+    const dept = onlyUser?.department;
+    // Cap to a few items per field so the paragraph stays readable.  The
+    // "Daily reports" table beneath the summary card already shows every entry,
+    // so this paragraph just needs to convey the gist.
+    const ITEMS_PER_FIELD = 3;
+    const fields = getReportFields(dept);
+    for (const f of fields) {
+      if (f.key === "challenges" || f.key === "remarks") continue; // covered separately at the end
+      const values = new Set();
+      for (const r of reports) {
+        const v = r.data?.[f.key];
+        if (typeof v !== "string") continue;
+        const t = v.trim();
+        if (t && t !== "—" && t !== "-") values.add(t);
+      }
+      if (values.size === 0) continue;
+      const picked = [...values].slice(0, ITEMS_PER_FIELD);
+      sentences.push(`${f.label}: ${_joinSentenceItems(picked)}.`);
+    }
+  } else {
+    // ─── Multi-employee path ───────────────────────────────────────────
+    const deptList = _joinList(deptNames);
+    sentences.push(
+      `Between ${startLabel} and ${endLabel}, ${peopleCount} ${peopleCount === 1 ? "employee" : "employees"} ` +
+      `across ${deptNames.length} ${deptNames.length === 1 ? "department" : "departments"} ` +
+      `(${deptList}) submitted ${totalReports} daily ${totalReports === 1 ? "report" : "reports"}.`
+    );
+
+    // For company-wide summaries we only cover the top 5 departments by volume
+    // to keep the paragraph readable, and round off with a count of the rest.
+    const TOP_DEPTS = 5;
+    const ACTIVITIES_PER_DEPT = 3;
+    const rankedDepts = [...deptNames].sort(
+      (a, b) => byDept[b].reports.length - byDept[a].reports.length,
+    );
+    const topDepts = rankedDepts.slice(0, TOP_DEPTS);
+    const restDepts = rankedDepts.slice(TOP_DEPTS);
+
+    for (const deptName of topDepts) {
+      const data = byDept[deptName];
+      const activities = new Set();
+      for (const r of data.reports) {
+        for (const [key, val] of Object.entries(r.data || {})) {
+          if (key === "challenges" || key === "remarks") continue;
+          if (typeof val !== "string") continue;
+          const trimmed = val.trim();
+          if (trimmed && trimmed !== "—" && trimmed !== "-") activities.add(trimmed);
+        }
+      }
+      if (activities.size === 0) continue;
+
+      const picked = [...activities].slice(0, ACTIVITIES_PER_DEPT);
+      const stat = ` (${data.people.size} ${data.people.size === 1 ? "person" : "people"}, ${data.reports.length} ${data.reports.length === 1 ? "report" : "reports"})`;
+      sentences.push(`${deptName}${stat}: ${_joinSentenceItems(picked)}.`);
+    }
+
+    if (restDepts.length > 0) {
+      sentences.push(`${restDepts.length} other ${restDepts.length === 1 ? "department" : "departments"} (${_joinList(restDepts)}) also reported in.`);
+    }
+  }
+
+  // Closing sentence — challenges and free-text remarks.
+  const notes = new Set();
+  for (const r of reports) {
+    for (const k of ["challenges", "remarks"]) {
+      const v = r.data?.[k];
+      if (typeof v !== "string") continue;
+      const t = v.trim();
+      if (t && t !== "—" && t !== "-") notes.add(t);
+    }
+  }
+  if (notes.size > 0) {
+    // Single-employee summaries get every note (they're already focused).
+    // Multi-employee summaries cap to 3 to keep the paragraph tight.
+    const picked = peopleCount === 1 ? [...notes] : [...notes].slice(0, 3);
+    const label = peopleCount === 1 ? "Notes & challenges" : "Challenges raised";
+    sentences.push(`${label}: ${_joinSentenceItems(picked)}.`);
+  }
+
+  return sentences.join(" ");
+}
+
+/* Joins items with commas + "and" before the last one. */
+function _joinList(items) {
+  if (items.length === 0) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+/* Joins free-text items with commas to read like natural prose.  Strips any
+ * trailing periods/semicolons/whitespace from each item so the joined output
+ * doesn't have double punctuation.
+ */
+function _joinSentenceItems(items) {
+  return items
+    .map((s) => s.replace(/[;.\s]+$/, ""))
+    .join(", ");
 }
 
 export function reportsToCSV(reports, opts = {}) {
