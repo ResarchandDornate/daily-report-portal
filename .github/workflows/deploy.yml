@@ -1,0 +1,20 @@
+name: Deploy Daily Report Web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-daily-report-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: Ornate-solar-resarchd/portals-infra/.github/workflows/_deploy-template.yml@main
+    with:
+      portal:       daily-report-web
+      portal_dir:   daily-report-frontend
+      services:     "daily-report-web"
+      health_url:   "https://daily-report.unityess.cloud/"
+      runner_label: daily-report-web
