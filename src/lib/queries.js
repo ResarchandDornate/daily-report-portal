@@ -1,7 +1,9 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api, auth } from "./api";
+import { formatPretty, fullName } from "./data";
 
 /* ---------- query keys ---------- */
 
@@ -24,6 +26,10 @@ export function useLogin() {
     onSuccess: (data) => {
       auth.save(data);
       qc.setQueryData(qk.me, data.user);
+      toast.success(`Welcome back, ${fullName(data.user)}`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Login failed");
     },
   });
 }
@@ -46,6 +52,10 @@ export function useSignup() {
     onSuccess: (data) => {
       auth.save(data);
       qc.setQueryData(qk.me, data.user);
+      toast.success(`Account created — welcome, ${fullName(data.user)}`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Signup failed");
     },
   });
 }
@@ -55,6 +65,7 @@ export function useLogout() {
   return () => {
     auth.clear();
     qc.clear();
+    toast.success("Signed out");
   };
 }
 
@@ -93,11 +104,22 @@ export function useEmployee(id) {
 }
 
 export function useReports(filters = {}) {
-  return useQuery({
+  const query = useQuery({
     queryKey: qk.reports(filters),
     queryFn: () => api.get("/api/reports", { params: filters }).then((r) => r.data),
     enabled: auth.isLoggedIn(),
+    placeholderData: (prev) => prev,
   });
+  // Backend returns `{ items, total, limit, offset }`. Unwrap items as `data`
+  // so existing consumers iterating the array keep working; expose pagination
+  // metadata on the return value for pages that need it.
+  return {
+    ...query,
+    data: query.data?.items,
+    total: query.data?.total ?? 0,
+    limit: query.data?.limit ?? 0,
+    offset: query.data?.offset ?? 0,
+  };
 }
 
 export function useMissingToday() {
@@ -113,10 +135,39 @@ export function useMissingToday() {
 export function useSubmitReport() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ date, data }) =>
-      api.post("/api/reports", { date, data }).then((r) => r.data),
-    onSuccess: () => {
+    mutationFn: ({ date, data, user_id }) =>
+      api
+        .post("/api/reports", { date, data, ...(user_id !== undefined && { user_id }) })
+        .then((r) => r.data),
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["reports"] });
+      toast.success(`Report saved for ${formatPretty(data.date)}`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to save report");
+    },
+  });
+}
+
+export function useApplyLeave() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ start_date, days, reason, user_id }) =>
+      api
+        .post("/api/reports/leave", {
+          start_date,
+          days,
+          reason,
+          ...(user_id !== undefined && { user_id }),
+        })
+        .then((r) => r.data),
+    onSuccess: (rows) => {
+      qc.invalidateQueries({ queryKey: ["reports"] });
+      const n = Array.isArray(rows) ? rows.length : 0;
+      toast.success(`Leave applied — ${n} ${n === 1 ? "day" : "days"} marked`);
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to apply leave");
     },
   });
 }
@@ -127,6 +178,10 @@ export function useDeleteReport() {
     mutationFn: (id) => api.delete(`/api/reports/${id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["reports"] });
+      toast.success("Report deleted");
+    },
+    onError: (err) => {
+      toast.error(err.message || "Failed to delete report");
     },
   });
 }

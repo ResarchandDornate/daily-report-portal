@@ -1,6 +1,7 @@
 "use client";
 
 import axios from "axios";
+import { toast } from "sonner";
 
 /**
  * axios instance for the FastAPI backend.
@@ -52,16 +53,32 @@ api.interceptors.request.use((config) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
-      auth.clear();
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new Event("auth:logout"));
-      }
-    }
+    const status = err.response?.status;
     const detail = err.response?.data?.detail;
     if (detail) {
       err.message = typeof detail === "string" ? detail : JSON.stringify(detail);
     }
+
+    if (status === 401) {
+      auth.clear();
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("auth:logout"));
+      }
+      // Show a toast unless the failing request was a login attempt — the
+      // login mutation has its own toast and we'd otherwise show two at once.
+      const isLoginEndpoint = (err.config?.url || "").includes("/api/auth/login");
+      if (!isLoginEndpoint) {
+        toast.error("Session expired. Please log in again.");
+      }
+    } else if (!err.response) {
+      // No HTTP response at all — network down, server unreachable, CORS, etc.
+      toast.error("Can't reach the server. Check your connection.");
+    } else if (status >= 500) {
+      toast.error(`Server error (${status}). Please try again.`);
+    }
+    // 4xx errors (other than 401) are surfaced via the mutation's onError so
+    // the user sees the specific field-level message — not a generic toast.
+
     return Promise.reject(err);
   },
 );

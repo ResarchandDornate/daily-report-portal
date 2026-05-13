@@ -127,18 +127,37 @@ export default function DashboardLayout({ children }) {
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Topbar */}
         <header className="sticky top-0 z-30 flex h-12 items-center justify-between gap-3 border-b border-zinc-200 bg-white px-4 sm:px-6">
-          <div className="flex items-center gap-2 lg:hidden">
+          <div className="flex items-center gap-2">
             <button
               onClick={() => setMobileNavOpen(true)}
               aria-label="Open navigation"
-              className="rounded-md border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-50"
+              className="rounded-md border border-zinc-200 bg-white p-1.5 text-zinc-700 hover:bg-zinc-50 lg:hidden"
             >
               <MenuIcon className="h-4 w-4" />
             </button>
-            <Image src="/ornateLogo.png" alt="Ornate Solar" width={90} height={24} priority className="h-5 w-auto" style={{ width: "auto" }} />
+            <Image
+              src="/ornateLogo.png"
+              alt="Ornate Solar"
+              width={90}
+              height={24}
+              priority
+              className="h-5 w-auto lg:hidden"
+              style={{ width: "auto" }}
+            />
+            {/* Back button — every dashboard page except the root */}
+            {pathname !== "/dashboard" && (
+              <button
+                onClick={() => router.back()}
+                aria-label="Go back"
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 transition hover:border-zinc-300 hover:bg-zinc-50"
+              >
+                <BackIcon className="h-3.5 w-3.5" />
+                Back
+              </button>
+            )}
           </div>
 
-          <div className="ml-auto hidden text-xs text-zinc-500 lg:block">
+          <div className="hidden text-xs text-zinc-500 lg:block">
             {greeting()}
             <span className="ml-1 text-zinc-400">· {todayLabel()}</span>
           </div>
@@ -282,6 +301,15 @@ function MenuIcon({ className = "" }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
       <path d="M3 6h18M3 12h18M3 18h18" />
+    </svg>
+  );
+}
+
+function BackIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M19 12H5" />
+      <path d="M11 19l-7-7 7-7" />
     </svg>
   );
 }

@@ -63,8 +63,8 @@ export default function LoginPage() {
       try {
         await signupMutation.mutateAsync(signupData);
         router.push("/dashboard");
-      } catch (err) {
-        setErrorMsg(err.message || "Signup failed");
+      } catch {
+        // Server-side error already surfaced as a toast via the mutation.
       }
       return;
     }
@@ -76,8 +76,8 @@ export default function LoginPage() {
     try {
       await loginMutation.mutateAsync(loginData);
       router.push("/dashboard");
-    } catch (err) {
-      setErrorMsg(err.message || "Login failed");
+    } catch {
+      // Server-side error already surfaced as a toast via the mutation.
     }
   };
 

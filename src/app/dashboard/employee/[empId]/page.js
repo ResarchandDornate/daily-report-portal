@@ -17,7 +17,7 @@ import {
   shiftDays,
   todayISO,
 } from "@/lib/data";
-import { useEmployee, useReports } from "@/lib/queries";
+import { useEmployee, useMe, useReports, useSubmitReport } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function EmployeePage() {
@@ -39,6 +39,37 @@ export default function EmployeePage() {
   const [shareOpen, setShareOpen] = useState(false);
   const [ceoEmail, setCeoEmail] = useState("ceo@ornatesolar.com");
   const [ceoPhone, setCeoPhone] = useState("");
+
+  // HR can edit any employee's reports.  When a row's Edit button is clicked
+  // we open a modal with the existing values pre-filled and the field shape
+  // matching the employee's department template.
+  const { data: me } = useMe();
+  const isHR = me?.role === "hr";
+  const submit = useSubmitReport();
+  const [editing, setEditing] = useState(null); // null | the report row being edited
+  const [editForm, setEditForm] = useState({});  // values keyed by field.key
+
+  function openEdit(report) {
+    setEditing(report);
+    const initial = {};
+    empFields.forEach((f) => { initial[f.key] = report.data?.[f.key] || ""; });
+    setEditForm(initial);
+  }
+  function closeEdit() {
+    setEditing(null);
+    setEditForm({});
+  }
+  async function saveEdit() {
+    if (!editing) return;
+    const cleaned = {};
+    empFields.forEach((f) => { cleaned[f.key] = editForm[f.key] || ""; });
+    try {
+      await submit.mutateAsync({ date: editing.date, data: cleaned, user_id: empId });
+      closeEdit();
+    } catch {
+      /* toast already fired by the mutation onError */
+    }
+  }
 
   useEffect(() => {
     if (!start && myReports.length) {
@@ -190,9 +221,9 @@ export default function EmployeePage() {
             </div>
           </div>
           <div className="flex items-center gap-3 text-center">
-            <Stat label="Total" value={stats.total} />
-            <Stat label="In range" value={stats.inRange} />
-            <Stat label="Last" value={stats.lastDate ? formatPretty(stats.lastDate) : "—"} small />
+            <Stat label="Total reports submitted" value={stats.total} />
+            <Stat label="Reports in selected range" value={stats.inRange} />
+            <Stat label="Last report on" value={stats.lastDate ? formatPretty(stats.lastDate) : "—"} small />
           </div>
         </div>
       </div>
@@ -246,10 +277,16 @@ export default function EmployeePage() {
             <Field label="To">
               <input type="date" value={end} min={start} max={todayISO()} onChange={(e) => setEnd(e.target.value)} className={inputClass} />
             </Field>
-            <div className="sm:col-span-2 flex items-end gap-1.5">
+            <div className="sm:col-span-2 flex flex-wrap items-end gap-1.5">
               <button onClick={setLast7} className={chipClass}>Last 7 days</button>
               <button onClick={setLast30} className={chipClass}>Last 30 days</button>
               <button onClick={resetFilter} className={chipClass}>All time</button>
+              <button
+                onClick={() => { resetFilter(); setShowFilter(false); }}
+                className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100"
+              >
+                Clear
+              </button>
             </div>
           </div>
         </div>
@@ -295,9 +332,9 @@ export default function EmployeePage() {
               </div>
             </div>
           )}
-          <p className="max-h-95 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
-            {summary.text}
-          </p>
+          <div className="max-h-95 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
+            {renderSummaryLines(summary.text)}
+          </div>
         </div>
       )}
 
@@ -313,29 +350,103 @@ export default function EmployeePage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th>Date</Table.Th>
+              <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
               {empFields.map((f) => (
-                <Table.Th key={f.key}>{f.label}</Table.Th>
+                <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
               ))}
+              {isHR && <Table.Th className="w-16 text-right">Actions</Table.Th>}
             </Table.Row>
           </Table.Head>
           <Table.Body>
             {filtered.length === 0 ? (
-              <Table.Empty colSpan={2 + empFields.length} message="No reports in this range." />
+              <Table.Empty colSpan={2 + empFields.length + (isHR ? 1 : 0)} message="No reports in this range." />
             ) : (
               filtered.map((r, i) => (
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPretty(r.date)}</Table.Td>
                   {empFields.map((f) => (
-                    <Table.Td key={f.key} className="align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
+                    <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
                   ))}
+                  {isHR && (
+                    <Table.Td className="align-top text-right">
+                      <button
+                        onClick={() => openEdit(r)}
+                        className="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
+                      >
+                        Edit
+                      </button>
+                    </Table.Td>
+                  )}
                 </Table.Row>
               ))
             )}
           </Table.Body>
         </Table>
       </div>
+
+      {/* Edit modal — HR-only, opens when openEdit() is called */}
+      {editing && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4"
+          onClick={closeEdit}
+        >
+          <div
+            className="w-full max-w-2xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-4 py-3">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-900">
+                  Edit report — {fullName(employee)}
+                </h3>
+                <p className="text-[11px] text-zinc-500">
+                  {formatPretty(editing.date)} · {dept?.name || "—"}
+                </p>
+              </div>
+              <button
+                onClick={closeEdit}
+                className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-800"
+                aria-label="Close"
+              >
+                <CloseIcon className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="grid max-h-[60vh] grid-cols-1 gap-3 overflow-y-auto p-4 sm:grid-cols-2">
+              {empFields.map((f) => (
+                <div key={f.key} className="sm:col-span-2">
+                  <label className="block text-[11px] font-medium uppercase tracking-wider text-zinc-500">
+                    {f.label}
+                  </label>
+                  <textarea
+                    value={editForm[f.key] || ""}
+                    onChange={(e) => setEditForm((s) => ({ ...s, [f.key]: e.target.value }))}
+                    rows={2}
+                    className="mt-1 block w-full resize-y rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-zinc-100 bg-stone-50 px-4 py-3">
+              <button
+                onClick={closeEdit}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={submit.isPending}
+                className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+              >
+                {submit.isPending ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -347,6 +458,22 @@ const inputClass =
 
 const chipClass =
   "rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50";
+
+function renderSummaryLines(text) {
+  if (!text) return null;
+  return text.split("\n").map((line, i) => {
+    const idx = line.indexOf(":");
+    if (idx === -1) {
+      return <p key={i} className="my-0.5">{line}</p>;
+    }
+    return (
+      <p key={i} className="my-0.5">
+        <span className="font-semibold text-zinc-900">{line.slice(0, idx + 1)}</span>
+        {line.slice(idx + 1)}
+      </p>
+    );
+  });
+}
 
 function Field({ label, children }) {
   return (
@@ -393,6 +520,14 @@ function FilterIcon({ className = "" }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
       <path d="M3 4h18l-7 9v6l-4 2v-8L3 4Z" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M6 6l12 12M18 6L6 18" />
     </svg>
   );
 }

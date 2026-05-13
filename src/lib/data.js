@@ -44,8 +44,21 @@ export function formatPretty(iso) {
 }
 
 export function getWeekRange(refIso = todayISO()) {
-  const start = shiftDays(refIso, -6);
-  return { start, end: refIso, label: "Last 7 days" };
+  // "Weekly" = the most recent 5 working days (Mon–Fri).
+  // If refIso falls on Sat/Sun, slide the end to the prior Friday — nobody
+  // submits reports on weekends, so the range should land on workdays.
+  const end = new Date(refIso + "T00:00:00");
+  while (end.getDay() === 0 || end.getDay() === 6) {
+    end.setDate(end.getDate() - 1);
+  }
+  const start = new Date(end);
+  let collected = 1;
+  while (collected < 5) {
+    start.setDate(start.getDate() - 1);
+    if (start.getDay() !== 0 && start.getDay() !== 6) collected++;
+  }
+  const toIso = (d) => d.toISOString().slice(0, 10);
+  return { start: toIso(start), end: toIso(end), label: "Last 5 working days" };
 }
 
 export function getMonthRange(refIso = todayISO()) {
@@ -128,29 +141,16 @@ export function buildSummaryText(reports, range, opts = {}) {
   const deptNames = Object.keys(byDept).sort();
 
   // ─── Single-employee path ────────────────────────────────────────────
-  // Skip the "X submitted N reports" opener — the surrounding card already
-  // shows that ("Weekly Summary — Abhishek Jadon · 6 reports").  Dive straight
-  // into one sentence per report column.
+  // One LINE per report field — easier to scan than a wall of prose.
   if (peopleCount === 1 && reports[0]) {
     const onlyUser = usersById[reports[0].user_id];
     const dept = onlyUser?.department;
-    // Cap to a few items per field so the paragraph stays readable.  The
-    // "Daily reports" table beneath the summary card already shows every entry,
-    // so this paragraph just needs to convey the gist.
     const ITEMS_PER_FIELD = 3;
     const fields = getReportFields(dept);
     for (const f of fields) {
-      if (f.key === "challenges" || f.key === "remarks") continue; // covered separately at the end
-      const values = new Set();
-      for (const r of reports) {
-        const v = r.data?.[f.key];
-        if (typeof v !== "string") continue;
-        const t = v.trim();
-        if (t && t !== "—" && t !== "-") values.add(t);
-      }
-      if (values.size === 0) continue;
-      const picked = [...values].slice(0, ITEMS_PER_FIELD);
-      sentences.push(`${f.label}: ${_joinSentenceItems(picked)}.`);
+      if (f.key === "challenges" || f.key === "remarks") continue; // closing sentence
+      const line = _summariseFieldLine(f, reports);
+      if (line) sentences.push(line);
     }
   } else {
     // ─── Multi-employee path ───────────────────────────────────────────
@@ -161,10 +161,11 @@ export function buildSummaryText(reports, range, opts = {}) {
       `(${deptList}) submitted ${totalReports} daily ${totalReports === 1 ? "report" : "reports"}.`
     );
 
-    // For company-wide summaries we only cover the top 5 departments by volume
-    // to keep the paragraph readable, and round off with a count of the rest.
+    // For company-wide summaries we cover the top 5 departments by volume.
+    // Inside each department, we now break the summary into one sub-sentence
+    // per column (report field) — so HR can see what each column contained.
     const TOP_DEPTS = 5;
-    const ACTIVITIES_PER_DEPT = 3;
+    const ITEMS_PER_FIELD = 2; // distinct activities per field per department
     const rankedDepts = [...deptNames].sort(
       (a, b) => byDept[b].reports.length - byDept[a].reports.length,
     );
@@ -173,20 +174,22 @@ export function buildSummaryText(reports, range, opts = {}) {
 
     for (const deptName of topDepts) {
       const data = byDept[deptName];
-      const activities = new Set();
-      for (const r of data.reports) {
-        for (const [key, val] of Object.entries(r.data || {})) {
-          if (key === "challenges" || key === "remarks") continue;
-          if (typeof val !== "string") continue;
-          const trimmed = val.trim();
-          if (trimmed && trimmed !== "—" && trimmed !== "-") activities.add(trimmed);
-        }
-      }
-      if (activities.size === 0) continue;
 
-      const picked = [...activities].slice(0, ACTIVITIES_PER_DEPT);
+      // Look up this department's column definitions via any of its submitters.
+      const sampleUser = usersById[data.reports[0]?.user_id];
+      const fields = getReportFields(sampleUser?.department);
+
+      // Build one clause per column (e.g. "Meeting: a, b. Revenue: c.").
+      const fieldClauses = [];
+      for (const f of fields) {
+        if (f.key === "challenges" || f.key === "remarks") continue; // closing sentence
+        const line = _summariseFieldLine(f, data.reports, { itemsPerField: ITEMS_PER_FIELD });
+        if (line) fieldClauses.push(line.replace(/\.$/, ""));
+      }
+      if (fieldClauses.length === 0) continue;
+
       const stat = ` (${data.people.size} ${data.people.size === 1 ? "person" : "people"}, ${data.reports.length} ${data.reports.length === 1 ? "report" : "reports"})`;
-      sentences.push(`${deptName}${stat}: ${_joinSentenceItems(picked)}.`);
+      sentences.push(`${deptName}${stat} — ${fieldClauses.join(". ")}.`);
     }
 
     if (restDepts.length > 0) {
@@ -212,7 +215,61 @@ export function buildSummaryText(reports, range, opts = {}) {
     sentences.push(`${label}: ${_joinSentenceItems(picked)}.`);
   }
 
-  return sentences.join(" ");
+  // One line per sentence — render with `whitespace-pre-line` so each
+  // field/department becomes its own visible line.
+  return sentences.join("\n");
+}
+
+/* Summarise a single field's values across multiple reports.
+ *
+ * - If every non-empty value parses as a number, return a sum + average line
+ *   (e.g. "Total Calls: total 4,610 across 6 days (avg 768).").  Useful for
+ *   numeric departments like Inside Sales.
+ * - Otherwise list up to N distinct text values
+ *   (e.g. "Warehouse Coordination: Cycle count, Spot audit, Reorganized rack.").
+ *
+ * Returns `null` if there's nothing to say.
+ */
+function _summariseFieldLine(field, reports, opts = {}) {
+  const { itemsPerField = 3 } = opts;
+  const numbers = [];
+  const textValues = new Set();
+  let nonEmpty = 0;
+  for (const r of reports) {
+    const v = r.data?.[field.key];
+    if (typeof v !== "string") continue;
+    const t = v.trim();
+    if (!t || t === "—" || t === "-") continue;
+    nonEmpty++;
+    const stripped = t.replace(/[₹,\s]/g, "");
+    const n = Number(stripped);
+    if (stripped !== "" && Number.isFinite(n)) {
+      numbers.push(n);
+    } else {
+      textValues.add(t);
+    }
+  }
+  if (nonEmpty === 0) return null;
+
+  // Pure-numeric column — totals/averages are far more useful than distinct samples.
+  if (numbers.length === nonEmpty) {
+    const sum = numbers.reduce((a, b) => a + b, 0);
+    const avg = sum / numbers.length;
+    const isCurrency = /₹|invoice|revenue|amount/i.test(field.label) || /invoiceTotal/i.test(field.key);
+    const fmt = (n) => {
+      const rounded = Number.isInteger(n) ? n : Math.round(n);
+      return isCurrency
+        ? `₹${rounded.toLocaleString("en-IN")}`
+        : rounded.toLocaleString("en-IN");
+    };
+    const dayWord = numbers.length === 1 ? "day" : "days";
+    return `${field.label}: total ${fmt(sum)} across ${numbers.length} ${dayWord} (avg ${fmt(avg)}).`;
+  }
+
+  // Mixed or text-only — list distinct values.
+  if (textValues.size === 0) return null;
+  const picked = [...textValues].slice(0, itemsPerField);
+  return `${field.label}: ${_joinSentenceItems(picked)}.`;
 }
 
 /* Joins items with commas + "and" before the last one. */
