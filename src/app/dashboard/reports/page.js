@@ -21,6 +21,16 @@ export default function ReportsPage() {
   const [start, setStart] = useState(shiftDays(todayISO(), -13));
   const [end, setEnd] = useState(todayISO());
   const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [selectedReport, setSelectedReport] = useState(null);
+
+  // Reset to page 1 whenever any filter changes — otherwise a narrow filter
+  // could leave the user on a page that no longer exists.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPage(1);
+  }, [dept, employeeId, start, end, pageSize]);
 
   const { data: departments = [] } = useDepartments();
   const { data: allEmployees = [] } = useEmployees();
@@ -30,10 +40,13 @@ export default function ReportsPage() {
       end,
       ...(dept !== "all" && { department: dept }),
       ...(employeeId !== "all" && { employee: Number(employeeId) }),
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
     }),
-    [start, end, dept, employeeId],
+    [start, end, dept, employeeId, page, pageSize],
   );
-  const { data: reports = [] } = useReports(reportFilters);
+  const { data: reports = [], total = 0, isFetching } = useReports(reportFilters);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const employeesById = useMemo(() => indexById(allEmployees), [allEmployees]);
   const deptsBySlug = useMemo(() => indexBySlug(departments), [departments]);
@@ -50,29 +63,34 @@ export default function ReportsPage() {
     }
   }, [employeeOptions, employeeId]);
 
+  // Server-side pagination means `reports` is already just the current page.
+  // The search box now filters the current page only (visible-rows filter).
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return reports
-      .filter((r) => {
-        if (!q) return true;
-        const emp = employeesById[r.user_id];
-        const blob = [
-          emp ? fullName(emp) : "",
-          emp?.title || "",
-          ...Object.values(r.data || {}),
-        ]
-          .join(" ")
-          .toLowerCase();
-        return blob.includes(q);
-      })
-      .sort((a, b) => b.date.localeCompare(a.date));
+    if (!q) return reports;
+    return reports.filter((r) => {
+      const emp = employeesById[r.user_id];
+      const blob = [
+        emp ? fullName(emp) : "",
+        emp?.title || "",
+        ...Object.values(r.data || {}),
+      ]
+        .join(" ")
+        .toLowerCase();
+      return blob.includes(q);
+    });
   }, [reports, query, employeesById]);
 
+  const visibleRows = filtered;
+
   function exportCSV() {
-    const csv = reportsToCSV(filtered, { usersById: employeesById });
-    const filename = `daily-reports_${start}_to_${end}.csv`;
+    const csv = reportsToCSV(reports, { usersById: employeesById });
+    const filename = `daily-reports_${start}_to_${end}_p${page}.csv`;
     downloadFile(filename, csv, "text/csv");
   }
+
+  const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const lastRow = Math.min(page * pageSize, total);
 
   return (
     <div className="space-y-4">
@@ -141,6 +159,34 @@ export default function ReportsPage() {
         </div>
       </div>
 
+      {/* Pagination summary + size selector */}
+      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-zinc-600">
+        <div>
+          {total === 0 ? (
+            "No reports match the current filters."
+          ) : (
+            <>
+              Showing <span className="font-medium text-zinc-900">{firstRow}–{lastRow}</span> of{" "}
+              <span className="font-medium text-zinc-900">{total}</span> reports
+              {isFetching && <span className="ml-2 text-zinc-400">loading…</span>}
+            </>
+          )}
+        </div>
+        <label className="flex items-center gap-1.5">
+          <span className="text-zinc-500">Rows per page</span>
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(Number(e.target.value))}
+            className="rounded-md border border-zinc-300 bg-white px-1.5 py-0.5 text-[11px] outline-none focus:border-orange-500"
+          >
+            <option value={25}>25</option>
+            <option value={50}>50</option>
+            <option value={100}>100</option>
+            <option value={200}>200</option>
+          </select>
+        </label>
+      </div>
+
       {/* Table */}
       {dept === "all" ? (
         <Table maxHeight={520}>
@@ -157,7 +203,7 @@ export default function ReportsPage() {
             {filtered.length === 0 ? (
               <Table.Empty colSpan={5} message="No reports match the current filters." />
             ) : (
-              filtered.map((r, i) => {
+              visibleRows.map((r, i) => {
                 const emp = employeesById[r.user_id];
                 const d = emp?.department;
                 const fields = emp ? getReportFields(emp.department) : [];
@@ -167,7 +213,11 @@ export default function ReportsPage() {
                   .slice(0, 2)
                   .join("  ·  ") || "—";
                 return (
-                  <Table.Row key={r.id}>
+                  <Table.Row
+                    key={r.id}
+                    onClick={() => setSelectedReport(r)}
+                    className="cursor-pointer"
+                  >
                     <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                     <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                       {formatPretty(r.date)}
@@ -209,10 +259,14 @@ export default function ReportsPage() {
                 {filtered.length === 0 ? (
                   <Table.Empty colSpan={3 + deptFields.length} message="No reports match the current filters." />
                 ) : (
-                  filtered.map((r, i) => {
+                  visibleRows.map((r, i) => {
                     const emp = employeesById[r.user_id];
                     return (
-                      <Table.Row key={r.id}>
+                      <Table.Row
+                        key={r.id}
+                        onClick={() => setSelectedReport(r)}
+                        className="cursor-pointer"
+                      >
                         <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                         <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                           {formatPretty(r.date)}
@@ -233,7 +287,125 @@ export default function ReportsPage() {
           );
         })()
       )}
+
+      {/* Report detail modal */}
+      {selectedReport && (
+        <ReportDetailModal
+          report={selectedReport}
+          employee={employeesById[selectedReport.user_id]}
+          onClose={() => setSelectedReport(null)}
+        />
+      )}
+
+      {/* Pagination controls */}
+      {total > pageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-zinc-200 bg-white px-3 py-2">
+          <p className="text-[11px] text-zinc-600">
+            Page <span className="font-medium text-zinc-900">{page}</span> of{" "}
+            <span className="font-medium text-zinc-900">{totalPages}</span>
+          </p>
+          <div className="flex items-center gap-1.5">
+            <PagerBtn onClick={() => setPage(1)} disabled={page === 1}>« First</PagerBtn>
+            <PagerBtn onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>‹ Prev</PagerBtn>
+            <PagerBtn onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>Next ›</PagerBtn>
+            <PagerBtn onClick={() => setPage(totalPages)} disabled={page >= totalPages}>Last »</PagerBtn>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function ReportDetailModal({ report, employee, onClose }) {
+  const dept = employee?.department;
+  const fields = getReportFields(dept);
+  const submitted = report.submitted_at ? new Date(report.submitted_at) : null;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-orange-700">
+              Daily Report · {formatPretty(report.date)}
+            </p>
+            <h2 className="mt-0.5 truncate text-base font-semibold text-zinc-900">
+              {employee ? fullName(employee) : `User #${report.user_id}`}
+            </h2>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-600">
+              {dept && (
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 ${badgeBg(dept.color)}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept.color)}`} />
+                  {dept.name}
+                </span>
+              )}
+              {employee?.title && <span>· {employee.title}</span>}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M6 18 18 6" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body — summary text, label + value per line, no cards */}
+        <div className="flex-1 overflow-auto bg-white px-5 py-4">
+          {fields.length === 0 ? (
+            <p className="text-xs text-zinc-500">No report fields defined for this department.</p>
+          ) : (
+            <p className="text-[13px] leading-7 text-zinc-800">
+              {fields.map((f) => {
+                const val = report.data?.[f.key];
+                const display = (typeof val === "string" && val.trim()) ? val : "—";
+                return (
+                  <span key={f.key} className="block">
+                    <span className="font-semibold text-zinc-900">{f.label}:</span>{" "}
+                    <span className="whitespace-pre-wrap text-zinc-700">{display}</span>
+                  </span>
+                );
+              })}
+            </p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-white px-4 py-2.5">
+          <p className="text-[11px] text-zinc-500">
+            {submitted ? `Submitted ${submitted.toLocaleString("en-IN")}` : "—"}
+          </p>
+          <button
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PagerBtn({ children, onClick, disabled }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      {children}
+    </button>
   );
 }
 

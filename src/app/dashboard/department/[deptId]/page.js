@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { formatPretty, fullName, todayISO } from "@/lib/data";
+import { formatPretty, fullName, getWeekRange, todayISO } from "@/lib/data";
 import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -20,6 +20,8 @@ export default function DepartmentPage() {
   const [query, setQuery] = useState("");
   const today = todayISO();
 
+  const week = useMemo(() => getWeekRange(), []);
+
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return employees
@@ -27,11 +29,21 @@ export default function DepartmentPage() {
         const empReports = reports.filter((r) => r.user_id === emp.id);
         const last = [...empReports].sort((a, b) => b.date.localeCompare(a.date))[0];
         const submittedToday = empReports.some((r) => r.date === today);
+        // Count distinct working-day submissions this week (max 5)
+        const weekDates = new Set();
+        for (const r of empReports) {
+          if (r.date < week.start || r.date > week.end) continue;
+          const dow = new Date(r.date + "T00:00:00").getDay();
+          if (dow === 0 || dow === 6) continue;
+          weekDates.add(r.date);
+        }
+        const weekCount = Math.min(weekDates.size, 5);
         return {
           emp,
           totalReports: empReports.length,
           lastDate: last?.date || null,
           submittedToday,
+          weekCount,
         };
       })
       .filter(({ emp }) => {
@@ -107,6 +119,7 @@ export default function DepartmentPage() {
             <Table.Th>Title</Table.Th>
             <Table.Th>Email</Table.Th>
             <Table.Th>Today</Table.Th>
+            <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
             <Table.Th>Total Reports</Table.Th>
             <Table.Th>Last Submission</Table.Th>
             <Table.Th />
@@ -115,11 +128,11 @@ export default function DepartmentPage() {
         <Table.Body>
           {rows.length === 0 ? (
             <Table.Empty
-              colSpan={8}
+              colSpan={9}
               message={query ? "No employees match your search." : "No employees in this department."}
             />
           ) : (
-            rows.map(({ emp, totalReports, lastDate, submittedToday }, i) => (
+            rows.map(({ emp, totalReports, lastDate, submittedToday, weekCount }, i) => (
               <Table.Row key={emp.id}>
                 <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                 <Table.Td className="align-top">
@@ -144,6 +157,9 @@ export default function DepartmentPage() {
                     </span>
                   )}
                 </Table.Td>
+                <Table.Td className="align-top text-center">
+                  <WeekBadge count={weekCount} />
+                </Table.Td>
                 <Table.Td className="align-top font-medium text-zinc-800">{totalReports}</Table.Td>
                 <Table.Td className="align-top text-zinc-700">
                   {lastDate ? formatPretty(lastDate) : "—"}
@@ -166,6 +182,23 @@ export default function DepartmentPage() {
 }
 
 /* ---------- bits ---------- */
+
+function WeekBadge({ count }) {
+  const total = 5;
+  const tone =
+    count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : count >= 3 ? "bg-amber-50 text-amber-800 ring-amber-200"
+    : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
+    : "bg-zinc-100 text-zinc-500 ring-zinc-200";
+  return (
+    <span
+      title={`${count} of ${total} working days submitted this week`}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
+    >
+      {count} / {total}
+    </span>
+  );
+}
 
 function Avatar({ name }) {
   const initials = name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();

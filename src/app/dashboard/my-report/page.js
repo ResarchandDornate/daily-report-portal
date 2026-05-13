@@ -7,7 +7,7 @@ import {
   getReportFields,
   todayISO,
 } from "@/lib/data";
-import { useMe, useReports, useSubmitReport } from "@/lib/queries";
+import { useApplyLeave, useMe, useReports, useSubmitReport } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 const buildEmpty = (fields) =>
@@ -16,14 +16,16 @@ const buildEmpty = (fields) =>
 export default function MyReportPage() {
   const [date, setDate] = useState(todayISO());
   const [form, setForm] = useState({});
-  const [saved, setSaved] = useState(false);
-  const [errorMsg, setErrorMsg] = useState("");
+  const [leaveOpen, setLeaveOpen] = useState(false);
+  // Submit success/failure is communicated via toast (sonner) at the app root,
+  // so we no longer track an `errorMsg` or `saved` flag here.
 
   const { data: me } = useMe();
   const { data: myReports = [] } = useReports(
     me ? { employee: me.id } : {},
   );
   const submit = useSubmitReport();
+  const applyLeave = useApplyLeave();
 
   const fields = useMemo(
     () => (me ? getReportFields(me.department) : []),
@@ -41,30 +43,24 @@ export default function MyReportPage() {
     const existing = myReports.find((r) => r.date === date);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(existing ? { ...EMPTY, ...existing.data } : EMPTY);
-    setSaved(false);
   }, [date, me, myReports, fields, EMPTY]);
 
   function update(key, val) {
     setForm((f) => ({ ...f, [key]: val }));
-    setSaved(false);
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (!me) return;
-    setErrorMsg("");
-
     const cleaned = {};
     fields.forEach((f) => {
       cleaned[f.key] = form[f.key] || "";
     });
-
+    // Success / failure both fire toasts via useSubmitReport's onSuccess/onError.
     try {
       await submit.mutateAsync({ date, data: cleaned });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
-    } catch (err) {
-      setErrorMsg(err.message || "Failed to save report");
+    } catch {
+      // Toast already fired in the mutation's onError.
     }
   }
 
@@ -109,12 +105,6 @@ export default function MyReportPage() {
         </div>
       </header>
 
-      {errorMsg && (
-        <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">
-          {errorMsg}
-        </div>
-      )}
-
       <form onSubmit={handleSubmit} className="overflow-hidden rounded-lg border border-orange-100 surface-card">
         <div className="flex items-center gap-2 border-b border-orange-100 bg-brand-strip px-4 py-2.5">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-orange-600 text-white">
@@ -144,12 +134,14 @@ export default function MyReportPage() {
             Reports save to the server. Submitting overwrites any previous entry for this date.
           </p>
           <div className="flex items-center gap-2">
-            {saved && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 ring-1 ring-emerald-200">
-                <CheckIcon className="h-3 w-3" />
-                Saved
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => setLeaveOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+            >
+              <PalmIcon className="h-3.5 w-3.5" />
+              Apply Leave
+            </button>
             <button
               type="button"
               onClick={clearForm}
@@ -168,6 +160,26 @@ export default function MyReportPage() {
         </div>
       </form>
 
+      {leaveOpen && (
+        <LeaveModal
+          defaultStart={date}
+          pending={applyLeave.isPending}
+          onClose={() => setLeaveOpen(false)}
+          onSubmit={async ({ startDate, days, reason }) => {
+            try {
+              await applyLeave.mutateAsync({
+                start_date: startDate,
+                days,
+                reason,
+              });
+              setLeaveOpen(false);
+            } catch {
+              // toast already fired
+            }
+          }}
+        />
+      )}
+
       {/* History */}
       <section>
         <h2 className="mb-2 text-sm font-semibold text-zinc-900">My past submissions</h2>
@@ -175,9 +187,9 @@ export default function MyReportPage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th>Date</Table.Th>
+              <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
               {fields.map((f) => (
-                <Table.Th key={f.key}>{f.label}</Table.Th>
+                <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
               ))}
             </Table.Row>
           </Table.Head>
@@ -192,7 +204,7 @@ export default function MyReportPage() {
                     {formatPretty(r.date)}
                   </Table.Td>
                   {fields.map((f) => (
-                    <Table.Td key={f.key} className="align-top text-zinc-700">
+                    <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">
                       {r.data?.[f.key] || "—"}
                     </Table.Td>
                   ))}
@@ -223,6 +235,121 @@ function Field({ label, value, onChange, span = "", index = 0 }) {
         className="mt-1.5 block w-full resize-y rounded-md border border-zinc-200 bg-stone-50/60 px-2.5 py-1.5 text-xs leading-relaxed text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-orange-500 focus:bg-white focus:ring-2 focus:ring-orange-500/20"
       />
     </div>
+  );
+}
+
+function LeaveModal({ defaultStart, pending, onClose, onSubmit }) {
+  const [startDate, setStartDate] = useState(defaultStart || todayISO());
+  const [days, setDays] = useState(1);
+  const [reason, setReason] = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (days < 1) return;
+    onSubmit({ startDate, days: Number(days), reason: reason.trim() });
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md overflow-hidden rounded-lg bg-white shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-amber-50 px-4 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-800">Leave</p>
+            <h2 className="mt-0.5 text-base font-semibold text-zinc-900">Apply for Leave</h2>
+            <p className="text-[11px] text-zinc-600">
+              We&rsquo;ll mark every day in the range as &quot;On Leave&quot; in your daily reports.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M6 18 18 6" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="space-y-3 px-4 py-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                From
+              </label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+              />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+                Days
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={days}
+                onChange={(e) => setDays(e.target.value)}
+                className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+              Reason
+            </label>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={3}
+              placeholder="e.g. Family function, medical, personal…"
+              className="mt-1 block w-full resize-y rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={pending || days < 1}
+            className="rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+          >
+            {pending ? "Applying…" : `Apply ${Number(days) || 0} day(s)`}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PalmIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M12 22V12" />
+      <path d="M12 12c0-3 2-5 5-5s4 2 3 4" />
+      <path d="M12 12c0-3-2-5-5-5s-4 2-3 4" />
+      <path d="M12 12c-1-3-4-4-7-2" />
+      <path d="M12 12c1-3 4-4 7-2" />
+    </svg>
   );
 }
 

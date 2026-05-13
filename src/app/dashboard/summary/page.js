@@ -34,6 +34,11 @@ export default function SummaryPage() {
   const { data: reports = [] } = useReports(reportFilters);
 
   const employeesById = useMemo(() => indexById(employees), [employees]);
+  const insideSalesDept = useMemo(
+    () => departments.find((d) => d.slug === "insideSales"),
+    [departments],
+  );
+  const showInsideSalesTable = dept === "insideSales" && !!insideSalesDept;
 
   function applyPreset(kind) {
     setPreset(kind);
@@ -110,7 +115,7 @@ export default function SummaryPage() {
       {/* Quick presets */}
       <div className="flex flex-wrap gap-1.5">
         <PresetButton active={preset === "weekly"} onClick={() => applyPreset("weekly")}>
-          Weekly (last 7 days)
+          Weekly (5 working days)
         </PresetButton>
         <PresetButton active={preset === "monthly"} onClick={() => applyPreset("monthly")}>
           Monthly (last 30 days)
@@ -226,12 +231,167 @@ export default function SummaryPage() {
           </div>
         )}
 
-        <p className="max-h-105 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
-          {summaryText}
-        </p>
+        <div className="max-h-105 overflow-auto p-4 text-[13px] leading-7 text-zinc-700">
+          {renderSummaryLines(summaryText)}
+        </div>
+      </div>
+
+      {showInsideSalesTable && (
+        <InsideSalesTable
+          reports={reports}
+          employees={employees}
+          fields={insideSalesDept.report_fields}
+          start={start}
+          end={end}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ---------- Inside Sales tabular summary ---------- */
+
+function InsideSalesTable({ reports, employees, fields, start, end }) {
+  const rows = useMemo(() => {
+    const insideSalesUsers = employees.filter(
+      (u) => u.department?.slug === "insideSales",
+    );
+    const sumsByUser = {};
+    for (const u of insideSalesUsers) {
+      sumsByUser[u.id] = Object.fromEntries(fields.map((f) => [f.key, 0]));
+    }
+    for (const r of reports) {
+      if (!sumsByUser[r.user_id]) continue;
+      for (const f of fields) {
+        const raw = r.data?.[f.key];
+        const n = parseNumber(raw);
+        sumsByUser[r.user_id][f.key] += n;
+      }
+    }
+    return insideSalesUsers
+      .map((u) => ({
+        id: u.id,
+        name: (u.first_name || u.username || "").trim(),
+        sums: sumsByUser[u.id],
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [reports, employees, fields]);
+
+  const totals = useMemo(() => {
+    const t = Object.fromEntries(fields.map((f) => [f.key, 0]));
+    for (const r of rows) {
+      for (const f of fields) t[f.key] += r.sums[f.key];
+    }
+    return t;
+  }, [rows, fields]);
+
+  const rangeLabel =
+    start === end ? formatPretty(start) : `${formatPretty(start)} → ${formatPretty(end)}`;
+
+  function copyTable() {
+    if (typeof navigator === "undefined") return;
+    const header = ["Name", ...fields.map((f) => f.label)].join("\t");
+    const body = rows
+      .map((r) => [r.name, ...fields.map((f) => r.sums[f.key])].join("\t"))
+      .join("\n");
+    const totalLine = ["Total", ...fields.map((f) => totals[f.key])].join("\t");
+    navigator.clipboard?.writeText([header, body, totalLine].join("\n"));
+  }
+
+  function downloadCSVTable() {
+    const header = ["Name", ...fields.map((f) => f.label)].join(",");
+    const body = rows
+      .map((r) => [r.name, ...fields.map((f) => r.sums[f.key])].join(","))
+      .join("\n");
+    const totalLine = ["Total", ...fields.map((f) => totals[f.key])].join(",");
+    const csv = [header, body, totalLine].join("\n");
+    downloadFile(`inside_sales_${start}_to_${end}.csv`, csv, "text/csv");
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900">Inside Sales — summary table</h3>
+          <p className="text-[11px] text-zinc-500">{rangeLabel}</p>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <ActionBtn onClick={copyTable} icon="copy">Copy</ActionBtn>
+          <ActionBtn onClick={downloadCSVTable} icon="download" tone="dark">CSV</ActionBtn>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-[13px]">
+          <thead>
+            <tr className="bg-zinc-50 text-zinc-700">
+              <th className="border-b border-r border-zinc-200 px-3 py-2 text-left font-semibold">
+                {rangeLabel}
+              </th>
+              {fields.map((f) => (
+                <th
+                  key={f.key}
+                  className="border-b border-r border-zinc-200 px-3 py-2 text-right font-semibold last:border-r-0"
+                >
+                  {f.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 ? (
+              <tr>
+                <td colSpan={fields.length + 1} className="px-3 py-6 text-center text-zinc-500">
+                  No Inside Sales employees found.
+                </td>
+              </tr>
+            ) : (
+              rows.map((r) => (
+                <tr key={r.id} className="hover:bg-zinc-50">
+                  <td className="border-b border-r border-zinc-200 px-3 py-2 font-medium text-zinc-900">
+                    {r.name}
+                  </td>
+                  {fields.map((f) => (
+                    <td
+                      key={f.key}
+                      className="border-b border-r border-zinc-200 px-3 py-2 text-right text-zinc-800 last:border-r-0"
+                    >
+                      {formatCell(r.sums[f.key], f.key)}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            )}
+            {rows.length > 0 && (
+              <tr className="bg-zinc-50 font-semibold text-zinc-900">
+                <td className="border-r border-zinc-200 px-3 py-2">Total</td>
+                {fields.map((f) => (
+                  <td
+                    key={f.key}
+                    className="border-r border-zinc-200 px-3 py-2 text-right last:border-r-0"
+                  >
+                    {formatCell(totals[f.key], f.key)}
+                  </td>
+                ))}
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
+}
+
+function parseNumber(v) {
+  if (v == null) return 0;
+  const cleaned = String(v).replace(/[₹,\s]/g, "");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatCell(value, key) {
+  if (!Number.isFinite(value)) return "—";
+  if (key === "invoiceTotal") return `₹${value.toLocaleString("en-IN")}`;
+  return value.toLocaleString("en-IN");
 }
 
 /* ---------- bits ---------- */
@@ -246,6 +406,22 @@ function Field({ label, children }) {
       <div className="mt-1">{children}</div>
     </div>
   );
+}
+
+function renderSummaryLines(text) {
+  if (!text) return null;
+  return text.split("\n").map((line, i) => {
+    const idx = line.indexOf(":");
+    if (idx === -1) {
+      return <p key={i} className="my-0.5">{line}</p>;
+    }
+    return (
+      <p key={i} className="my-0.5">
+        <span className="font-semibold text-zinc-900">{line.slice(0, idx + 1)}</span>
+        {line.slice(idx + 1)}
+      </p>
+    );
+  });
 }
 
 function PresetButton({ active, onClick, children }) {

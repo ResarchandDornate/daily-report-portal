@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { formatPretty, fullName } from "@/lib/data";
-import { useDepartments, useEmployees } from "@/lib/queries";
+import { formatPretty, fullName, getWeekRange } from "@/lib/data";
+import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function AllEmployeesPage() {
@@ -13,6 +13,25 @@ export default function AllEmployeesPage() {
 
   const { data: employees = [], isLoading } = useEmployees();
   const { data: departments = [] } = useDepartments();
+
+  // "This week" attendance — fetch reports across the last 5 working days
+  // and build a per-employee count of distinct submission dates.
+  const week = useMemo(() => getWeekRange(), []);
+  const { data: weekReports = [] } = useReports({ start: week.start, end: week.end });
+  const submissionsByUser = useMemo(() => {
+    const map = {};
+    for (const r of weekReports) {
+      // Only Mon-Fri count toward the 5-working-day window — seed data
+      // (and any backfills) may include Sat / Sun rows.
+      const dow = new Date(r.date + "T00:00:00").getDay();
+      if (dow === 0 || dow === 6) continue;
+      if (!map[r.user_id]) map[r.user_id] = new Set();
+      map[r.user_id].add(r.date);
+    }
+    const counts = {};
+    for (const [uid, set] of Object.entries(map)) counts[uid] = Math.min(set.size, 5);
+    return counts;
+  }, [weekReports]);
 
   const organisations = useMemo(() => {
     const set = new Set();
@@ -36,13 +55,7 @@ export default function AllEmployeesPage() {
           (e.title || "").toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => {
-        // Sort by department, then by name
-        const da = a.department?.name || "~";
-        const db = b.department?.name || "~";
-        if (da !== db) return da.localeCompare(db);
-        return fullName(a).localeCompare(fullName(b));
-      });
+      .sort((a, b) => fullName(a).localeCompare(fullName(b)));
   }, [employees, query, deptFilter, orgFilter]);
 
   return (
@@ -73,7 +86,7 @@ export default function AllEmployeesPage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search name, organisation, dept, RM, email…"
+            placeholder="Search name, organisation, department, reporting manager, email…"
             className="block w-full rounded-md border border-zinc-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
           />
         </div>
@@ -99,24 +112,25 @@ export default function AllEmployeesPage() {
         </select>
       </div>
 
-      {/* Table — columns match the Excel: Organisation | S. No. | Name | Dept | RM | DOJ */}
+      {/* Table — columns match the Excel: Organisation | S. No. | Name | Department | Reporting Manager | Date of Joining */}
       <Table maxHeight={600}>
         <Table.Head>
           <Table.Row>
             <Table.Th>Organisation</Table.Th>
             <Table.Th className="w-16 text-center">S. No.</Table.Th>
             <Table.Th>Name</Table.Th>
-            <Table.Th>Dept</Table.Th>
-            <Table.Th>RM</Table.Th>
-            <Table.Th>DOJ</Table.Th>
+            <Table.Th>Department</Table.Th>
+            <Table.Th>Reporting Manager</Table.Th>
+            <Table.Th>Date of Joining</Table.Th>
+            <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
             <Table.Th />
           </Table.Row>
         </Table.Head>
         <Table.Body>
           {isLoading ? (
-            <Table.Empty colSpan={7} message="Loading employees…" />
+            <Table.Empty colSpan={8} message="Loading employees…" />
           ) : filtered.length === 0 ? (
-            <Table.Empty colSpan={7} message={query || deptFilter !== "all" || orgFilter !== "all" ? "No employees match the current filters." : "No employees found."} />
+            <Table.Empty colSpan={8} message={query || deptFilter !== "all" || orgFilter !== "all" ? "No employees match the current filters." : "No employees found."} />
           ) : (
             filtered.map((emp, i) => {
               const dept = emp.department;
@@ -155,6 +169,9 @@ export default function AllEmployeesPage() {
                   <Table.Td className="align-top whitespace-nowrap text-zinc-700">
                     {emp.date_of_joining ? formatPretty(emp.date_of_joining) : "—"}
                   </Table.Td>
+                  <Table.Td className="align-top text-center">
+                    <WeekBadge count={submissionsByUser[emp.id] || 0} />
+                  </Table.Td>
                   <Table.Td className="align-top text-right">
                     <Link
                       href={`/dashboard/employee/${emp.id}`}
@@ -177,6 +194,23 @@ export default function AllEmployeesPage() {
 
 const inputClass =
   "block w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20";
+
+function WeekBadge({ count }) {
+  const total = 5;
+  const tone =
+    count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : count >= 3 ? "bg-amber-50 text-amber-800 ring-amber-200"
+    : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
+    : "bg-zinc-100 text-zinc-500 ring-zinc-200";
+  return (
+    <span
+      title={`${count} of ${total} working days submitted this week`}
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
+    >
+      {count} / {total}
+    </span>
+  );
+}
 
 function Avatar({ name }) {
   const initials = (name || "—").split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();

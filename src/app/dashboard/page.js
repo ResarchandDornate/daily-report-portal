@@ -41,6 +41,11 @@ export default function OverviewPage() {
     [reports, today]
   );
 
+  const onLeaveToday = useMemo(
+    () => todayReports.filter((r) => r.data?.__leave__ === "1").length,
+    [todayReports]
+  );
+
   const missing = useMemo(
     () => missingIds.map((id) => employeesById[id]).filter(Boolean),
     [missingIds, employeesById]
@@ -53,7 +58,18 @@ export default function OverviewPage() {
         const submitted = inDept.filter((e) =>
           todayReports.some((r) => r.user_id === e.id)
         ).length;
-        return { ...d, total: inDept.length, submitted, missing: inDept.length - submitted };
+        const onLeave = inDept.filter((e) =>
+          todayReports.some(
+            (r) => r.user_id === e.id && r.data?.__leave__ === "1",
+          ),
+        ).length;
+        return {
+          ...d,
+          total: inDept.length,
+          submitted,
+          onLeave,
+          missing: inDept.length - submitted,
+        };
       }),
     [departments, employees, todayReports]
   );
@@ -63,66 +79,94 @@ export default function OverviewPage() {
     [reports]
   );
 
+  // For employees: report-field columns are determined by their department.
+  const meFields = useMemo(() => getReportFields(me?.department), [me]);
+
   if (!me) return null;
 
   return (
     <div className="space-y-5">
       {/* Stat cards — HR only */}
       {isHR && (
-        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="Total Employees" value={employees.length} hint={`Across ${departments.length} departments`} icon="users" tone="orange" />
-          <StatCard label="Reports Today" value={todayReports.length} hint={formatPretty(today)} icon="check" tone="emerald" />
-          <StatCard label="Missing Today" value={missing.length} hint="Pending submissions" icon="alert" tone="rose" />
-          <StatCard label="Departments" value={departments.length} hint="Active teams" icon="grid" tone="zinc" />
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          <StatCard label="Total Employees" value={employees.length} hint={`Across ${departments.length} departments`} icon="users" tone="orange" href="/dashboard/employees" />
+          <StatCard label="Reports Today" value={todayReports.length} hint={formatPretty(today)} icon="check" tone="emerald" href="/dashboard/reports" />
+          <StatCard label="Missing Today" value={missing.length} hint="Pending submissions" icon="alert" tone="rose" href="#pending-today" />
+          <StatCard label="On Leave Today" value={onLeaveToday} hint="View leave log" icon="palm" tone="amber" href="/dashboard/leaves" />
+          <StatCard label="Departments" value={departments.length} hint="Active teams" icon="grid" tone="zinc" href="#department-breakdown" />
         </section>
       )}
 
       {/* Departments + Missing — HR only */}
       {isHR && (
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+        <div id="department-breakdown" className="scroll-mt-16 lg:col-span-2">
           <Card>
             <CardHeader title="Department breakdown" subtitle={`Submission status for ${formatPretty(today)}`} />
-            <div className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2">
-              {deptStats.map((d) => {
-                const pct = d.total ? Math.round((d.submitted / d.total) * 100) : 0;
-                return (
-                  <Link
-                    key={d.slug}
-                    href={`/dashboard/department/${d.slug}`}
-                    className="block rounded-md border border-zinc-200 bg-white p-3 transition hover:border-zinc-300"
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-2 w-2 rounded-full ${dotBg(d.color)}`} />
-                        <p className="text-sm font-medium text-zinc-900">{d.name}</p>
-                      </div>
-                      <span className="text-xs font-medium text-zinc-500">
-                        {d.submitted}/{d.total}
-                      </span>
-                    </div>
-                    <div className="relative mt-2.5 h-1.5 overflow-hidden rounded-full bg-zinc-100">
-                      <div
-                        className={`h-full rounded-full ${barBg(d.color)}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[11px]">
-                      <span className="text-zinc-600">{pct}% complete</span>
-                      {d.missing > 0 ? (
-                        <span className="text-rose-600">{d.missing} missing</span>
-                      ) : (
-                        <span className="text-emerald-600">All in</span>
-                      )}
-                    </div>
-                  </Link>
-                );
-              })}
-            </div>
+            <Table maxHeight={460} className="rounded-none border-0">
+              <Table.Head>
+                <Table.Row>
+                  <Table.Th>Department</Table.Th>
+                  <Table.Th className="text-center">Total Employees</Table.Th>
+                  <Table.Th className="text-center">Submitted</Table.Th>
+                  <Table.Th className="text-center">On Leave</Table.Th>
+                  <Table.Th className="text-center">Missing</Table.Th>
+                  <Table.Th className="text-center">Status</Table.Th>
+                </Table.Row>
+              </Table.Head>
+              <Table.Body>
+                {deptStats.length === 0 ? (
+                  <Table.Empty colSpan={6} message="No departments yet." />
+                ) : (
+                  deptStats.map((d) => {
+                    const pct = d.total ? Math.round((d.submitted / d.total) * 100) : 0;
+                    const allIn = d.total > 0 && d.missing === 0;
+                    return (
+                      <Table.Row key={d.slug}>
+                        <Table.Td>
+                          <Link
+                            href={`/dashboard/department/${d.slug}`}
+                            className="inline-flex items-center gap-2 font-medium text-zinc-900 hover:text-orange-700"
+                          >
+                            <span className={`h-2 w-2 rounded-full ${dotBg(d.color)}`} />
+                            {d.name}
+                          </Link>
+                        </Table.Td>
+                        <Table.Td className="text-center font-medium text-zinc-800">{d.total}</Table.Td>
+                        <Table.Td className="text-center font-medium text-emerald-600">{d.submitted}</Table.Td>
+                        <Table.Td className="text-center">
+                          {d.onLeave > 0 ? (
+                            <span className="inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
+                              {d.onLeave}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-400">—</span>
+                          )}
+                        </Table.Td>
+                        <Table.Td className="text-center font-medium text-rose-600">{d.missing}</Table.Td>
+                        <Table.Td className="text-center">
+                          {allIn ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                              All in · 100%
+                            </span>
+                          ) : d.total === 0 ? (
+                            <span className="text-[10px] text-zinc-400">—</span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
+                              {pct}% complete
+                            </span>
+                          )}
+                        </Table.Td>
+                      </Table.Row>
+                    );
+                  })
+                )}
+              </Table.Body>
+            </Table>
           </Card>
         </div>
 
-        <div>
+        <div id="pending-today" className="scroll-mt-16">
           <Card>
             <CardHeader
               title="Pending today"
@@ -172,11 +216,16 @@ export default function OverviewPage() {
       </section>
       )}
 
-      {/* Recent submissions — visible to everyone (employees see only their own) */}
+      {/* Recent submissions — HR sees company-wide, employees see their own
+          with department-specific report-field columns. */}
       <Card>
         <CardHeader
           title={isHR ? "Recent submissions" : "My recent submissions"}
-          subtitle={isHR ? "Latest 8 reports from across the company" : "Your last 8 daily reports"}
+          subtitle={
+            isHR
+              ? "Latest 8 reports from across the company"
+              : `Your last 8 daily reports${me.department ? ` — ${me.department.name}` : ""}`
+          }
           right={
             isHR && (
               <Link
@@ -189,59 +238,96 @@ export default function OverviewPage() {
             )
           }
         />
-        <Table maxHeight={360} className="rounded-none border-0">
-          <Table.Head>
-            <Table.Row>
-              <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th>Date</Table.Th>
-              <Table.Th>Employee</Table.Th>
-              <Table.Th>Department</Table.Th>
-              <Table.Th>Summary</Table.Th>
-            </Table.Row>
-          </Table.Head>
-          <Table.Body>
-            {recent.length === 0 ? (
-              <Table.Empty colSpan={5} message="No reports yet." />
-            ) : (
-              recent.map((r, i) => {
-                const emp = employeesById[r.user_id];
-                const dept = emp?.department;
-                const fields = emp ? getReportFields(emp.department) : [];
-                const summary = fields
-                  .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
-                  .filter(Boolean)
-                  .slice(0, 2)
-                  .join("  ·  ") || "—";
-                return (
+        {isHR ? (
+          <Table maxHeight={360} className="rounded-none border-0">
+            <Table.Head>
+              <Table.Row>
+                <Table.Th className="w-12 text-center">#</Table.Th>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>Employee</Table.Th>
+                <Table.Th>Department</Table.Th>
+                <Table.Th>Summary</Table.Th>
+              </Table.Row>
+            </Table.Head>
+            <Table.Body>
+              {recent.length === 0 ? (
+                <Table.Empty colSpan={5} message="No reports yet." />
+              ) : (
+                recent.map((r, i) => {
+                  const emp = employeesById[r.user_id];
+                  const dept = emp?.department;
+                  const fields = emp ? getReportFields(emp.department) : [];
+                  const summary = fields
+                    .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join("  ·  ") || "—";
+                  return (
+                    <Table.Row key={r.id}>
+                      <Table.Td className="text-center font-medium text-zinc-500">{i + 1}</Table.Td>
+                      <Table.Td className="whitespace-nowrap font-medium text-zinc-800">
+                        {formatPretty(r.date)}
+                      </Table.Td>
+                      <Table.Td>
+                        <Link
+                          href={emp ? `/dashboard/employee/${emp.id}` : "#"}
+                          className="flex items-center gap-2 hover:text-orange-700"
+                        >
+                          <Avatar name={emp ? fullName(emp) : "—"} />
+                          <span className="font-medium text-zinc-900 hover:text-orange-700">
+                            {emp ? fullName(emp) : `User #${r.user_id}`}
+                          </span>
+                        </Link>
+                      </Table.Td>
+                      <Table.Td>
+                        <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${badgeBg(dept?.color)}`}>
+                          <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept?.color)}`} />
+                          {dept?.name || "—"}
+                        </span>
+                      </Table.Td>
+                      <Table.Td className="max-w-md truncate text-zinc-600">{summary}</Table.Td>
+                    </Table.Row>
+                  );
+                })
+              )}
+            </Table.Body>
+          </Table>
+        ) : (
+          /* Employee view — department-specific columns matching the My Daily Report form. */
+          <Table maxHeight={420} className="rounded-none border-0">
+            <Table.Head>
+              <Table.Row>
+                <Table.Th className="w-12 text-center">#</Table.Th>
+                <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
+                {meFields.map((f) => (
+                  <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
+                ))}
+              </Table.Row>
+            </Table.Head>
+            <Table.Body>
+              {recent.length === 0 ? (
+                <Table.Empty
+                  colSpan={2 + meFields.length}
+                  message="No reports yet. Fill in the form on My Daily Report to get started."
+                />
+              ) : (
+                recent.map((r, i) => (
                   <Table.Row key={r.id}>
-                    <Table.Td className="text-center font-medium text-zinc-500">{i + 1}</Table.Td>
-                    <Table.Td className="whitespace-nowrap font-medium text-zinc-800">
+                    <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                    <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                       {formatPretty(r.date)}
                     </Table.Td>
-                    <Table.Td>
-                      <Link
-                        href={emp ? `/dashboard/employee/${emp.id}` : "#"}
-                        className="flex items-center gap-2 hover:text-orange-700"
-                      >
-                        <Avatar name={emp ? fullName(emp) : "—"} />
-                        <span className="font-medium text-zinc-900 hover:text-orange-700">
-                          {emp ? fullName(emp) : `User #${r.user_id}`}
-                        </span>
-                      </Link>
-                    </Table.Td>
-                    <Table.Td>
-                      <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${badgeBg(dept?.color)}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept?.color)}`} />
-                        {dept?.name || "—"}
-                      </span>
-                    </Table.Td>
-                    <Table.Td className="max-w-md truncate text-zinc-600">{summary}</Table.Td>
+                    {meFields.map((f) => (
+                      <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">
+                        {r.data?.[f.key] || "—"}
+                      </Table.Td>
+                    ))}
                   </Table.Row>
-                );
-              })
-            )}
-          </Table.Body>
-        </Table>
+                ))
+              )}
+            </Table.Body>
+          </Table>
+        )}
       </Card>
     </div>
   );
@@ -249,31 +335,41 @@ export default function OverviewPage() {
 
 /* ---------- Components ---------- */
 
-function StatCard({ label, value, hint, tone = "zinc", icon }) {
+function StatCard({ label, value, hint, tone = "zinc", icon, href }) {
   const map = {
     zinc:    { bg: "bg-stone-50",   chip: "bg-zinc-900 text-white",     bar: "bg-zinc-300",    border: "border-zinc-200" },
     emerald: { bg: "bg-emerald-50/70", chip: "bg-emerald-600 text-white", bar: "bg-emerald-400", border: "border-emerald-200" },
     rose:    { bg: "bg-rose-50/70",  chip: "bg-rose-600 text-white",    bar: "bg-rose-400",    border: "border-rose-200" },
     orange:  { bg: "bg-orange-50/70", chip: "bg-orange-600 text-white",  bar: "bg-orange-400",  border: "border-orange-200" },
+    amber:   { bg: "bg-amber-50/70", chip: "bg-amber-600 text-white",   bar: "bg-amber-400",   border: "border-amber-200" },
   };
   const t = map[tone] || map.zinc;
-  return (
-    <div className={`relative overflow-hidden rounded-lg border ${t.border} ${t.bg} p-3.5 shadow-soft transition hover:-translate-y-0.5 hover:shadow-lift`}>
+  const baseClass = `relative block overflow-hidden rounded-md border ${t.border} ${t.bg} px-2.5 py-2 shadow-soft transition hover:-translate-y-0.5 hover:shadow-lift focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500`;
+  const inner = (
+    <>
       <span className={`absolute inset-x-0 top-0 h-0.5 ${t.bar}`} />
-      <div className="flex items-start justify-between">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-[9px] font-semibold uppercase tracking-wider text-zinc-500">
             {label}
           </p>
-          <p className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900">{value}</p>
-          <p className="mt-0.5 text-[11px] text-zinc-600">{hint}</p>
+          <p className="mt-0.5 text-lg font-semibold tracking-tight text-zinc-900">{value}</p>
+          <p className="mt-0.5 truncate text-[10px] text-zinc-600">{hint}</p>
         </div>
-        <div className={`flex h-8 w-8 items-center justify-center rounded-md shadow-soft ${t.chip}`}>
-          <StatIcon name={icon} className="h-4 w-4" />
+        <div className={`flex h-6 w-6 shrink-0 items-center justify-center rounded ${t.chip}`}>
+          <StatIcon name={icon} className="h-3 w-3" />
         </div>
       </div>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <Link href={href} className={baseClass}>
+        {inner}
+      </Link>
+    );
+  }
+  return <div className={baseClass}>{inner}</div>;
 }
 
 function Card({ children, className = "" }) {
@@ -328,20 +424,11 @@ function StatIcon({ name, className = "" }) {
   if (name === "check") return (<svg {...props}><path d="M5 12l4 4L19 7" /></svg>);
   if (name === "alert") return (<svg {...props}><circle cx="12" cy="12" r="10" /><path d="M12 8v4" /><path d="M12 16h.01" /></svg>);
   if (name === "grid") return (<svg {...props}><rect x="3" y="3" width="7" height="7" rx="1.5" /><rect x="14" y="3" width="7" height="7" rx="1.5" /><rect x="3" y="14" width="7" height="7" rx="1.5" /><rect x="14" y="14" width="7" height="7" rx="1.5" /></svg>);
+  if (name === "palm") return (<svg {...props}><path d="M12 22V12" /><path d="M12 12c0-3 2-5 5-5s4 2 3 4" /><path d="M12 12c0-3-2-5-5-5s-4 2-3 4" /><path d="M12 12c-1-3-4-4-7-2" /><path d="M12 12c1-3 4-4 7-2" /></svg>);
   return null;
 }
 
 function dotBg(color) {
-  return {
-    indigo: "bg-indigo-500",
-    amber: "bg-amber-500",
-    emerald: "bg-emerald-500",
-    rose: "bg-rose-500",
-    sky: "bg-sky-500",
-  }[color] || "bg-zinc-400";
-}
-
-function barBg(color) {
   return {
     indigo: "bg-indigo-500",
     amber: "bg-amber-500",
