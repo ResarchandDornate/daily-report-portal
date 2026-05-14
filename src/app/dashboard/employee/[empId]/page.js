@@ -7,6 +7,7 @@ import {
   buildSummaryText,
   downloadFile,
   formatPretty,
+  formatPrettyWithDay,
   fullName,
   getMonthRange,
   getReportFields,
@@ -384,7 +385,7 @@ export default function EmployeePage() {
               filtered.map((r, i) => (
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
-                  <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPretty(r.date)}</Table.Td>
+                  <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPrettyWithDay(r.date)}</Table.Td>
                   {tableFields.map((f) => (
                     <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
                   ))}

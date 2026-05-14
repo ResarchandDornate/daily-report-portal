@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   downloadFile,
   formatPretty,
+  formatPrettyWithDay,
   fullName,
   getReportFields,
   indexById,
@@ -220,7 +221,7 @@ export default function ReportsPage() {
                   >
                     <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                     <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
-                      {formatPretty(r.date)}
+                      {formatPrettyWithDay(r.date)}
                     </Table.Td>
                     <Table.Td className="align-top">
                       <div className="text-xs font-medium text-zinc-900">{emp ? fullName(emp) : `User #${r.user_id}`}</div>
@@ -269,7 +270,7 @@ export default function ReportsPage() {
                       >
                         <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                         <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
-                          {formatPretty(r.date)}
+                          {formatPrettyWithDay(r.date)}
                         </Table.Td>
                         <Table.Td className="align-top">
                           <div className="text-xs font-medium text-zinc-900">{emp ? fullName(emp) : `User #${r.user_id}`}</div>

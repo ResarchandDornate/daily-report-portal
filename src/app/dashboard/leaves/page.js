@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  formatPretty,
+  formatPrettyWithDay,
   fullName,
   indexById,
   shiftDays,
@@ -266,8 +266,8 @@ export default function LeavesPage() {
                       {p.deptName}
                     </span>
                   </Table.Td>
-                  <Table.Td className="align-top whitespace-nowrap text-zinc-700">{formatPretty(p.start)}</Table.Td>
-                  <Table.Td className="align-top whitespace-nowrap text-zinc-700">{formatPretty(p.end)}</Table.Td>
+                  <Table.Td className="align-top whitespace-nowrap text-zinc-700">{formatPrettyWithDay(p.start)}</Table.Td>
+                  <Table.Td className="align-top whitespace-nowrap text-zinc-700">{formatPrettyWithDay(p.end)}</Table.Td>
                   <Table.Td className="text-center align-top">
                     <span className="inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 ring-1 ring-amber-200">
                       {p.days}

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   formatPretty,
+  formatPrettyWithDay,
   fullName,
   getReportFields,
   indexById,
@@ -310,7 +311,7 @@ function OverviewContent() {
                     <Table.Row key={r.id}>
                       <Table.Td className="text-center font-medium text-zinc-500">{i + 1}</Table.Td>
                       <Table.Td className="whitespace-nowrap font-medium text-zinc-800">
-                        {formatPretty(r.date)}
+                        {formatPrettyWithDay(r.date)}
                       </Table.Td>
                       <Table.Td>
                         <Link
@@ -361,7 +362,7 @@ function OverviewContent() {
                   <Table.Row key={r.id}>
                     <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                     <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
-                      {formatPretty(r.date)}
+                      {formatPrettyWithDay(r.date)}
                     </Table.Td>
                     {meFields.map((f) => (
                       <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">
