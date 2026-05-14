@@ -43,6 +43,20 @@ export function formatPretty(iso) {
   return d.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+// Same as formatPretty but prefixed with the abbreviated weekday — used in
+// table date cells where surfacing the day-of-week aids quick scanning.
+// e.g. "Wed, 13 May 2026".
+export function formatPrettyWithDay(iso) {
+  if (!iso) return "";
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export function getWeekRange(refIso = todayISO()) {
   // "Weekly" = the most recent 5 working days (Mon–Fri).
   // If refIso falls on Sat/Sun, slide the end to the prior Friday — nobody

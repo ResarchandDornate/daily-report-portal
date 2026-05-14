@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { formatPretty, fullName, getWeekRange } from "@/lib/data";
+import { formatPrettyWithDay, fullName, getWeekRange } from "@/lib/data";
 import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -167,7 +167,7 @@ export default function AllEmployeesPage() {
                   </Table.Td>
                   <Table.Td className="align-top text-zinc-700">{emp.reporting_manager || "—"}</Table.Td>
                   <Table.Td className="align-top whitespace-nowrap text-zinc-700">
-                    {emp.date_of_joining ? formatPretty(emp.date_of_joining) : "—"}
+                    {emp.date_of_joining ? formatPrettyWithDay(emp.date_of_joining) : "—"}
                   </Table.Td>
                   <Table.Td className="align-top text-center">
                     <WeekBadge count={submissionsByUser[emp.id] || 0} />

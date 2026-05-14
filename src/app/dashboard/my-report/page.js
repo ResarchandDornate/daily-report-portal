@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   formatPretty,
+  formatPrettyWithDay,
   fullName,
   getReportFields,
   todayISO,
@@ -201,7 +202,7 @@ export default function MyReportPage() {
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
-                    {formatPretty(r.date)}
+                    {formatPrettyWithDay(r.date)}
                   </Table.Td>
                   {fields.map((f) => (
                     <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">
