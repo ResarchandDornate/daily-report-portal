@@ -86,6 +86,26 @@ export default function EmployeePage() {
       .sort((a, b) => b.date.localeCompare(a.date));
   }, [myReports, start, end]);
 
+  // Reorder columns by how often they're actually filled in this date range —
+  // mostly-filled columns sit on the left, mostly-empty columns slide to the
+  // right.  Limited to Logistics (12 fields) where the table is so wide that
+  // scrolling past lots of empty columns is painful.  Other departments keep
+  // their natural field order.
+  const tableFields = useMemo(() => {
+    if (dept?.slug !== "logistics") return empFields;
+    const fillCount = (key) =>
+      filtered.reduce((n, r) => {
+        const v = r.data?.[key];
+        if (typeof v !== "string") return n;
+        const t = v.trim();
+        return t && t !== "—" && t !== "-" ? n + 1 : n;
+      }, 0);
+    return empFields
+      .map((f, idx) => ({ f, count: fillCount(f.key), idx }))
+      .sort((a, b) => b.count - a.count || a.idx - b.idx)
+      .map(({ f }) => f);
+  }, [empFields, filtered, dept]);
+
   const stats = useMemo(() => {
     const lastDate = myReports.length
       ? myReports.reduce((max, r) => (r.date > max ? r.date : max), myReports[0].date)
@@ -351,7 +371,7 @@ export default function EmployeePage() {
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
               <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
-              {empFields.map((f) => (
+              {tableFields.map((f) => (
                 <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
               ))}
               {isHR && <Table.Th className="w-16 text-right">Actions</Table.Th>}
@@ -365,7 +385,7 @@ export default function EmployeePage() {
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPretty(r.date)}</Table.Td>
-                  {empFields.map((f) => (
+                  {tableFields.map((f) => (
                     <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
                   ))}
                   {isHR && (
