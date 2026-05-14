@@ -3,15 +3,28 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useDepartments, useLogout, useMe } from "@/lib/queries";
-import { fullName } from "@/lib/data";
+import { fullName, todayISO } from "@/lib/data";
 import { auth } from "@/lib/api";
 
 export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Date filter — only shown on the Overview page.  Stored in the URL as
+  // ?date=YYYY-MM-DD so refreshes / shares preserve it.
+  const isOverview = pathname === "/dashboard";
+  const selectedDate = searchParams.get("date") || todayISO();
+  function setSelectedDate(d) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!d || d === todayISO()) params.delete("date");
+    else params.set("date", d);
+    const qs = params.toString();
+    router.push(`/dashboard${qs ? `?${qs}` : ""}`);
+  }
 
   const { data: me, isLoading: meLoading, isError: meError } = useMe();
   const { data: departments = [] } = useDepartments();
@@ -157,9 +170,34 @@ export default function DashboardLayout({ children }) {
             )}
           </div>
 
-          <div className="hidden text-xs text-zinc-500 lg:block">
-            {greeting()}
-            <span className="ml-1 text-zinc-400">· {todayLabel()}</span>
+          <div className="flex items-center gap-3">
+            {isOverview && (
+              <label className="flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700 shadow-sm hover:border-orange-300 focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20">
+                <CalendarIcon className="h-3.5 w-3.5 text-zinc-500" />
+                <span className="font-medium text-zinc-500">Date</span>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  max={todayISO()}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="bg-transparent text-[11px] font-medium text-zinc-900 outline-none"
+                />
+                {selectedDate !== todayISO() && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDate(todayISO())}
+                    title="Reset to today"
+                    className="rounded-full p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+                  >
+                    <CloseIcon className="h-3 w-3" />
+                  </button>
+                )}
+              </label>
+            )}
+            <div className="hidden text-xs text-zinc-500 lg:block">
+              {greeting()}
+              <span className="ml-1 text-zinc-400">· {todayLabel()}</span>
+            </div>
           </div>
         </header>
 
@@ -293,6 +331,15 @@ function ChevronIcon({ className = "" }) {
   return (
     <svg viewBox="0 0 20 20" fill="currentColor" className={className} aria-hidden>
       <path d="M5.5 7.5a1 1 0 0 1 1.4 0L10 10.6l3.1-3.1a1 1 0 1 1 1.4 1.4l-3.8 3.8a1 1 0 0 1-1.4 0L5.5 8.9a1 1 0 0 1 0-1.4Z" />
+    </svg>
+  );
+}
+
+function CalendarIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M8 3v4M16 3v4M3 11h18" />
     </svg>
   );
 }

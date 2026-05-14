@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   formatPretty,
   fullName,
@@ -13,13 +14,19 @@ import {
   useDepartments,
   useEmployees,
   useMe,
-  useMissingToday,
   useReports,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function OverviewPage() {
+  const searchParams = useSearchParams();
   const today = todayISO();
+  // Selected date is driven by the navbar's date picker via `?date=` in the URL.
+  // Defaults to today; clamped to <= today by the picker's `max` attr.
+  const selectedDate = searchParams.get("date") || today;
+  const isToday = selectedDate === today;
+  const dateLabel = isToday ? "today" : formatPretty(selectedDate);
+  const stampLabel = isToday ? "Today" : `On ${formatPretty(selectedDate)}`;
 
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
@@ -27,39 +34,49 @@ export default function OverviewPage() {
   // For HR: fetch everything. For employees: fetch only their own reports.
   const { data: departments = [] } = useDepartments();
   const { data: employees = [] } = useEmployees();
-  const reportFilters = useMemo(
-    () => (me && !isHR ? { employee: me.id } : {}),
-    [me, isHR],
-  );
+  // Pull reports for the entire window from the selected date through today so
+  // we cover both stat cards (selected-date slice) and "Recent submissions"
+  // (most-recent overall) in one query.
+  const reportFilters = useMemo(() => {
+    const base = me && !isHR ? { employee: me.id } : {};
+    // If the user picked a past date, broaden the range so we have those rows
+    // cached.  Otherwise keep the default (latest 1000).
+    if (!isToday) return { ...base, start: selectedDate, end: today };
+    return base;
+  }, [me, isHR, isToday, selectedDate, today]);
   const { data: reports = [] } = useReports(reportFilters);
-  const { data: missingIds = [] } = useMissingToday();
 
   const employeesById = useMemo(() => indexById(employees), [employees]);
 
-  const todayReports = useMemo(
-    () => reports.filter((r) => r.date === today),
-    [reports, today]
+  const selectedDateReports = useMemo(
+    () => reports.filter((r) => r.date === selectedDate),
+    [reports, selectedDate]
   );
 
-  const onLeaveToday = useMemo(
-    () => todayReports.filter((r) => r.data?.__leave__ === "1").length,
-    [todayReports]
+  const onLeaveCount = useMemo(
+    () => selectedDateReports.filter((r) => r.data?.__leave__ === "1").length,
+    [selectedDateReports]
   );
 
-  const missing = useMemo(
-    () => missingIds.map((id) => employeesById[id]).filter(Boolean),
-    [missingIds, employeesById]
-  );
+  // Compute the missing list client-side from the selected date — this lets
+  // HR scrub back through prior dates and still see who didn't submit.  Mirrors
+  // the backend rule: non-HR, active employees who have no row on that date.
+  const missing = useMemo(() => {
+    const submittedIds = new Set(selectedDateReports.map((r) => r.user_id));
+    return employees.filter(
+      (e) => e.role !== "hr" && e.is_active !== false && !submittedIds.has(e.id),
+    );
+  }, [employees, selectedDateReports]);
 
   const deptStats = useMemo(
     () =>
       departments.map((d) => {
         const inDept = employees.filter((e) => e.department?.slug === d.slug);
         const submitted = inDept.filter((e) =>
-          todayReports.some((r) => r.user_id === e.id)
+          selectedDateReports.some((r) => r.user_id === e.id)
         ).length;
         const onLeave = inDept.filter((e) =>
-          todayReports.some(
+          selectedDateReports.some(
             (r) => r.user_id === e.id && r.data?.__leave__ === "1",
           ),
         ).length;
@@ -71,7 +88,7 @@ export default function OverviewPage() {
           missing: inDept.length - submitted,
         };
       }),
-    [departments, employees, todayReports]
+    [departments, employees, selectedDateReports]
   );
 
   const recent = useMemo(
@@ -90,9 +107,9 @@ export default function OverviewPage() {
       {isHR && (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <StatCard label="Total Employees" value={employees.length} hint={`Across ${departments.length} departments`} icon="users" tone="orange" href="/dashboard/employees" />
-          <StatCard label="Reports Today" value={todayReports.length} hint={formatPretty(today)} icon="check" tone="emerald" href="/dashboard/reports" />
-          <StatCard label="Missing Today" value={missing.length} hint="Pending submissions" icon="alert" tone="rose" href="#pending-today" />
-          <StatCard label="On Leave Today" value={onLeaveToday} hint="View leave log" icon="palm" tone="amber" href="/dashboard/leaves" />
+          <StatCard label={`Reports ${stampLabel}`} value={selectedDateReports.length} hint={formatPretty(selectedDate)} icon="check" tone="emerald" href="/dashboard/reports" />
+          <StatCard label={`Missing ${stampLabel}`} value={missing.length} hint="Pending submissions" icon="alert" tone="rose" href="#pending-today" />
+          <StatCard label={`On Leave ${stampLabel}`} value={onLeaveCount} hint="View leave log" icon="palm" tone="amber" href="/dashboard/leaves" />
           <StatCard label="Departments" value={departments.length} hint="Active teams" icon="grid" tone="zinc" href="#department-breakdown" />
         </section>
       )}
@@ -102,7 +119,7 @@ export default function OverviewPage() {
       <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div id="department-breakdown" className="scroll-mt-16 lg:col-span-2">
           <Card>
-            <CardHeader title="Department breakdown" subtitle={`Submission status for ${formatPretty(today)}`} />
+            <CardHeader title="Department breakdown" subtitle={`Submission status for ${formatPretty(selectedDate)}`} />
             <Table maxHeight={460} className="rounded-none border-0">
               <Table.Head>
                 <Table.Row>
@@ -169,7 +186,7 @@ export default function OverviewPage() {
         <div id="pending-today" className="scroll-mt-16">
           <Card>
             <CardHeader
-              title="Pending today"
+              title={isToday ? "Pending today" : `Pending on ${formatPretty(selectedDate)}`}
               subtitle="Employees who haven't submitted"
               right={
                 <Link
@@ -187,7 +204,9 @@ export default function OverviewPage() {
                     <CheckIcon className="h-4 w-4" />
                   </div>
                   <p className="text-xs font-medium text-zinc-700">All caught up</p>
-                  <p className="text-[11px] text-zinc-500">Everyone has submitted today.</p>
+                  <p className="text-[11px] text-zinc-500">
+                    Everyone has submitted {dateLabel}.
+                  </p>
                 </div>
               )}
               {missing.map((emp) => (
