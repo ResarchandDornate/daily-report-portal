@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
@@ -11,20 +11,9 @@ import { auth } from "@/lib/api";
 export default function DashboardLayout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // Date filter — only shown on the Overview page.  Stored in the URL as
-  // ?date=YYYY-MM-DD so refreshes / shares preserve it.
   const isOverview = pathname === "/dashboard";
-  const selectedDate = searchParams.get("date") || todayISO();
-  function setSelectedDate(d) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (!d || d === todayISO()) params.delete("date");
-    else params.set("date", d);
-    const qs = params.toString();
-    router.push(`/dashboard${qs ? `?${qs}` : ""}`);
-  }
 
   const { data: me, isLoading: meLoading, isError: meError } = useMe();
   const { data: departments = [] } = useDepartments();
@@ -172,27 +161,9 @@ export default function DashboardLayout({ children }) {
 
           <div className="flex items-center gap-3">
             {isOverview && (
-              <label className="flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700 shadow-sm hover:border-orange-300 focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20">
-                <CalendarIcon className="h-3.5 w-3.5 text-zinc-500" />
-                <span className="font-medium text-zinc-500">Date</span>
-                <input
-                  type="date"
-                  value={selectedDate}
-                  max={todayISO()}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  className="bg-transparent text-[11px] font-medium text-zinc-900 outline-none"
-                />
-                {selectedDate !== todayISO() && (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedDate(todayISO())}
-                    title="Reset to today"
-                    className="rounded-full p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
-                  >
-                    <CloseIcon className="h-3 w-3" />
-                  </button>
-                )}
-              </label>
+              <Suspense fallback={<DateFilterFallback />}>
+                <DateFilterChip />
+              </Suspense>
             )}
             <div className="hidden text-xs text-zinc-500 lg:block">
               {greeting()}
@@ -239,6 +210,58 @@ export default function DashboardLayout({ children }) {
 }
 
 /* ---------- Components ---------- */
+
+// Date filter is isolated in its own component so that useSearchParams() — which
+// bails the parent out of static prerendering — only affects this small subtree,
+// which is wrapped in <Suspense> in the layout above.  Stored in the URL as
+// ?date=YYYY-MM-DD so refreshes / shares preserve it.
+function DateFilterChip() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const selectedDate = searchParams.get("date") || todayISO();
+
+  function setSelectedDate(d) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (!d || d === todayISO()) params.delete("date");
+    else params.set("date", d);
+    const qs = params.toString();
+    router.push(`/dashboard${qs ? `?${qs}` : ""}`);
+  }
+
+  return (
+    <label className="flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700 shadow-sm hover:border-orange-300 focus-within:border-orange-500 focus-within:ring-2 focus-within:ring-orange-500/20">
+      <CalendarIcon className="h-3.5 w-3.5 text-zinc-500" />
+      <span className="font-medium text-zinc-500">Date</span>
+      <input
+        type="date"
+        value={selectedDate}
+        max={todayISO()}
+        onChange={(e) => setSelectedDate(e.target.value)}
+        className="bg-transparent text-[11px] font-medium text-zinc-900 outline-none"
+      />
+      {selectedDate !== todayISO() && (
+        <button
+          type="button"
+          onClick={() => setSelectedDate(todayISO())}
+          title="Reset to today"
+          className="rounded-full p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700"
+        >
+          <CloseIcon className="h-3 w-3" />
+        </button>
+      )}
+    </label>
+  );
+}
+
+function DateFilterFallback() {
+  return (
+    <label className="flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-2 py-1 text-[11px] text-zinc-700 shadow-sm">
+      <CalendarIcon className="h-3.5 w-3.5 text-zinc-500" />
+      <span className="font-medium text-zinc-500">Date</span>
+      <span className="text-[11px] font-medium text-zinc-400">—</span>
+    </label>
+  );
+}
 
 function NavLink({ item, active }) {
   return (

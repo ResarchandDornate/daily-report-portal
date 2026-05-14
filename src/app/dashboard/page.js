@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -18,7 +18,26 @@ import {
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
+// `useSearchParams()` inside OverviewContent bails the route out of static
+// prerendering — wrap it in <Suspense> so Next.js can prerender a shell and
+// stream the content in on the client.
 export default function OverviewPage() {
+  return (
+    <Suspense fallback={<OverviewSkeleton />}>
+      <OverviewContent />
+    </Suspense>
+  );
+}
+
+function OverviewSkeleton() {
+  return (
+    <div className="flex items-center justify-center py-16">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-orange-600 border-t-transparent" />
+    </div>
+  );
+}
+
+function OverviewContent() {
   const searchParams = useSearchParams();
   const today = todayISO();
   // Selected date is driven by the navbar's date picker via `?date=` in the URL.
