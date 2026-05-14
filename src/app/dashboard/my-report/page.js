@@ -188,9 +188,9 @@ export default function MyReportPage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
+              <Table.Th className="min-w-27.5 whitespace-nowrap">Date</Table.Th>
               {fields.map((f) => (
-                <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
+                <Table.Th key={f.key} className="min-w-60">{f.label}</Table.Th>
               ))}
             </Table.Row>
           </Table.Head>
@@ -205,7 +205,7 @@ export default function MyReportPage() {
                     {formatPrettyWithDay(r.date)}
                   </Table.Td>
                   {fields.map((f) => (
-                    <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">
+                    <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">
                       {r.data?.[f.key] || "—"}
                     </Table.Td>
                   ))}
