@@ -110,8 +110,14 @@ function OverviewContent() {
     [departments, employees, selectedDateReports]
   );
 
+  // HR sees the latest 8 across the company; employees see ALL of their own
+  // reports (typically a few dozen, capped at the API's 1000-row default).
   const recent = useMemo(
     () => [...reports].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8),
+    [reports]
+  );
+  const myRecent = useMemo(
+    () => [...reports].sort((a, b) => b.date.localeCompare(a.date)),
     [reports]
   );
 
@@ -262,7 +268,7 @@ function OverviewContent() {
           subtitle={
             isHR
               ? "Latest 8 reports from across the company"
-              : `Your last 8 daily reports${me.department ? ` — ${me.department.name}` : ""}`
+              : `Your ${myRecent.length} daily report${myRecent.length === 1 ? "" : "s"}${me.department ? ` — ${me.department.name}` : ""}`
           }
           right={
             isHR && (
@@ -331,32 +337,34 @@ function OverviewContent() {
             </Table.Body>
           </Table>
         ) : (
-          /* Employee view — department-specific columns matching the My Daily Report form. */
-          <Table maxHeight={420} className="rounded-none border-0">
+          /* Employee view — department-specific columns matching the My Daily Report form.
+             maxHeight="none": let every row render and the page scroll naturally,
+             so a single tall row can't push earlier rows out of the viewport. */
+          <Table maxHeight="none" className="rounded-none border-0">
             <Table.Head>
               <Table.Row>
                 <Table.Th className="w-12 text-center">#</Table.Th>
-                <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
+                <Table.Th className="min-w-27.5 whitespace-nowrap">Date</Table.Th>
                 {meFields.map((f) => (
-                  <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
+                  <Table.Th key={f.key} className="min-w-60">{f.label}</Table.Th>
                 ))}
               </Table.Row>
             </Table.Head>
             <Table.Body>
-              {recent.length === 0 ? (
+              {myRecent.length === 0 ? (
                 <Table.Empty
                   colSpan={2 + meFields.length}
                   message="No reports yet. Fill in the form on My Daily Report to get started."
                 />
               ) : (
-                recent.map((r, i) => (
+                myRecent.map((r, i) => (
                   <Table.Row key={r.id}>
                     <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                     <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                       {formatPretty(r.date)}
                     </Table.Td>
                     {meFields.map((f) => (
-                      <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">
+                      <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">
                         {r.data?.[f.key] || "—"}
                       </Table.Td>
                     ))}
