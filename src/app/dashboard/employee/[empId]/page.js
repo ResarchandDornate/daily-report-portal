@@ -371,9 +371,9 @@ export default function EmployeePage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th className="min-w-[110px] whitespace-nowrap">Date</Table.Th>
+              <Table.Th className="min-w-27.5 whitespace-nowrap">Date</Table.Th>
               {tableFields.map((f) => (
-                <Table.Th key={f.key} className="min-w-[240px]">{f.label}</Table.Th>
+                <Table.Th key={f.key} className="min-w-60">{f.label}</Table.Th>
               ))}
               {isHR && <Table.Th className="w-16 text-right">Actions</Table.Th>}
             </Table.Row>
@@ -387,7 +387,7 @@ export default function EmployeePage() {
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPrettyWithDay(r.date)}</Table.Td>
                   {tableFields.map((f) => (
-                    <Table.Td key={f.key} className="min-w-[240px] align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
+                    <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
                   ))}
                   {isHR && (
                     <Table.Td className="align-top text-right">
