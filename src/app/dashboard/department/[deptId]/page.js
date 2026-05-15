@@ -3,14 +3,25 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { formatPretty, fullName, getWeekRange, todayISO } from "@/lib/data";
-import { useDepartments, useEmployees, useReports } from "@/lib/queries";
+import {
+  useDeleteDepartment,
+  useDepartments,
+  useEmployees,
+  useMe,
+  useReports,
+  useUpdateDepartment,
+} from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function DepartmentPage() {
   const params = useParams();
+  const router = useRouter();
   const slug = params.deptId; // route param now carries the slug
 
+  const { data: me } = useMe();
+  const isHR = me?.role === "hr";
   const { data: departments = [], isLoading: deptsLoading } = useDepartments();
   const dept = departments.find((d) => d.slug === slug);
 
@@ -18,6 +29,9 @@ export default function DepartmentPage() {
   const { data: reports = [] } = useReports({ department: slug });
 
   const [query, setQuery] = useState("");
+  const [editingDept, setEditingDept] = useState(false);
+  const updateDept = useUpdateDepartment();
+  const deleteDept = useDeleteDepartment();
   const today = todayISO();
 
   const week = useMemo(() => getWeekRange(), []);
@@ -95,6 +109,17 @@ export default function DepartmentPage() {
               </p>
             </div>
           </div>
+          {isHR && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setEditingDept(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                <PencilIcon className="h-3.5 w-3.5" />
+                Edit department
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -177,11 +202,177 @@ export default function DepartmentPage() {
           )}
         </Table.Body>
       </Table>
+
+      {editingDept && (
+        <EditDepartmentModal
+          dept={dept}
+          onClose={() => setEditingDept(false)}
+          onSave={async (patch) => {
+            try {
+              await updateDept.mutateAsync({ slug: dept.slug, ...patch });
+              setEditingDept(false);
+            } catch {}
+          }}
+          onDelete={async () => {
+            if (employees.length > 0) {
+              alert("Move all employees out of this department before deleting it.");
+              return;
+            }
+            if (!confirm(`Delete department "${dept.name}"? This cannot be undone.`)) return;
+            try {
+              await deleteDept.mutateAsync(dept.slug);
+              router.push("/dashboard");
+            } catch {}
+          }}
+          pending={updateDept.isPending || deleteDept.isPending}
+          canDelete={employees.length === 0}
+        />
+      )}
     </div>
   );
 }
 
 /* ---------- bits ---------- */
+
+function EditDepartmentModal({ dept, onClose, onSave, onDelete, pending, canDelete }) {
+  const [name, setName] = useState(dept?.name || "");
+  const [color, setColor] = useState(dept?.color || "zinc");
+  const [fields, setFields] = useState(() =>
+    (dept?.report_fields || []).map((f) => ({ key: f.key, label: f.label })),
+  );
+
+  function updateField(i, k, v) {
+    setFields((arr) => arr.map((f, idx) => (idx === i ? { ...f, [k]: v } : f)));
+  }
+  function addField() {
+    setFields((arr) => [...arr, { key: "", label: "" }]);
+  }
+  function removeField(i) {
+    setFields((arr) => arr.filter((_, idx) => idx !== i));
+  }
+
+  function save(e) {
+    e.preventDefault();
+    const cleaned = fields
+      .map((f) => ({ key: (f.key || "").trim(), label: (f.label || "").trim() }))
+      .filter((f) => f.key && f.label);
+    onSave({ name: name.trim(), color, report_fields: cleaned });
+  }
+
+  const colors = ["indigo", "amber", "emerald", "rose", "sky", "zinc"];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+      <form onSubmit={save} onClick={(e) => e.stopPropagation()} className="flex max-h-[90vh] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-orange-50 px-4 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-orange-700">Edit department</p>
+            <h2 className="mt-0.5 text-base font-semibold text-zinc-900">{dept.name}</h2>
+            <p className="text-[11px] text-zinc-600">Slug <code className="rounded bg-zinc-100 px-1 font-mono">{dept.slug}</code> is fixed.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900">
+            <CloseIcon className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-auto px-4 py-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Name</label>
+              <input className="mt-1 block w-full rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            <div>
+              <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Color</label>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                {colors.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setColor(c)}
+                    className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium ${color === c ? "border-zinc-900 bg-zinc-50 text-zinc-900" : "border-zinc-200 bg-white text-zinc-600 hover:bg-zinc-50"}`}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${dotBg(c)}`} />
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label className="block text-[10px] font-medium uppercase tracking-wider text-zinc-500">Report fields</label>
+              <button type="button" onClick={addField} className="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50">
+                + Add field
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-zinc-500">Order here is the order shown in the daily report form and tables.</p>
+            <div className="mt-1.5 space-y-1.5">
+              {fields.length === 0 && (
+                <p className="rounded-md border border-dashed border-zinc-200 px-3 py-3 text-[11px] text-zinc-500">No fields yet — click "Add field" to create one.</p>
+              )}
+              {fields.map((f, i) => (
+                <div key={i} className="flex items-center gap-1.5">
+                  <span className="w-5 text-center text-[10px] font-semibold text-zinc-400">{i + 1}</span>
+                  <input
+                    className="block w-1/3 rounded-md border border-zinc-300 bg-white px-2 py-1 font-mono text-[11px] outline-none focus:border-orange-500"
+                    value={f.key}
+                    onChange={(e) => updateField(i, "key", e.target.value)}
+                    placeholder="fieldKey"
+                  />
+                  <input
+                    className="block flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] outline-none focus:border-orange-500"
+                    value={f.label}
+                    onChange={(e) => updateField(i, "label", e.target.value)}
+                    placeholder="Field label shown in UI"
+                  />
+                  <button type="button" onClick={() => removeField(i)} className="rounded-md p-1 text-zinc-400 hover:bg-rose-50 hover:text-rose-600" aria-label="Remove field">
+                    <CloseIcon className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={pending || !canDelete}
+            title={canDelete ? "Delete department" : "Move employees out first"}
+            className="rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Delete department
+          </button>
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100">Cancel</button>
+            <button type="submit" disabled={pending || !name.trim()} className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60">
+              {pending ? "Saving…" : "Save changes"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function PencilIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
+function CloseIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <path d="M6 6l12 12M6 18 18 6" />
+    </svg>
+  );
+}
 
 function WeekBadge({ count }) {
   const total = 5;
