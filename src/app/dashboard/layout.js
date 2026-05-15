@@ -40,6 +40,10 @@ export default function DashboardLayout({ children }) {
     if (!me) return;
     if (me.role === "hr") return;
     const employeePaths = ["/dashboard", "/dashboard/my-report"];
+    // Inside Sales employees get one extra page for their calling sheets.
+    if (me.department?.slug === "insideSales") {
+      employeePaths.push("/dashboard/sales-uploads");
+    }
     const isAllowed = employeePaths.includes(pathname);
     if (!isAllowed) router.replace("/dashboard");
   }, [me, pathname, router]);
@@ -52,9 +56,19 @@ export default function DashboardLayout({ children }) {
     );
   }
 
+  // "Sales Sheets" is for Inside Sales employees + HR only.  We can't gate
+  // it purely by role (since it's also for an employee role), so we apply
+  // the dept check below when filtering the visible nav.
   const NAV = [
     { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
     { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
+    {
+      href: "/dashboard/sales-uploads",
+      label: "Sales Sheets",
+      icon: "upload",
+      roles: ["hr", "employee"],
+      requiresDept: "insideSales",
+    },
     { href: "/dashboard/employees", label: "All Employees", icon: "users", roles: ["hr"] },
     { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
     {
@@ -70,7 +84,14 @@ export default function DashboardLayout({ children }) {
     { href: "/dashboard/summary", label: "Generate Summary", icon: "chart", roles: ["hr"] },
   ];
 
-  const visibleNav = NAV.filter((n) => n.roles.includes(me.role));
+  const visibleNav = NAV.filter((n) => {
+    if (!n.roles.includes(me.role)) return false;
+    // HR always sees dept-gated items; non-HR only when their dept matches.
+    if (n.requiresDept && me.role !== "hr") {
+      return me.department?.slug === n.requiresDept;
+    }
+    return true;
+  });
   const meName = fullName(me);
   const subtitle =
     me.role === "hr"
@@ -418,6 +439,7 @@ function NavIcon({ name, className = "" }) {
   if (name === "table") return (<svg {...props}><rect x="3" y="3" width="18" height="18" rx="2" /><path d="M3 9h18" /><path d="M9 3v18" /></svg>);
   if (name === "chart") return (<svg {...props}><path d="M3 3v18h18" /><path d="M7 14l4-4 4 4 5-6" /></svg>);
   if (name === "users") return (<svg {...props}><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><circle cx="17" cy="9" r="3" /><path d="M22 21v-1a3 3 0 0 0-3-3h-2" /></svg>);
+  if (name === "upload") return (<svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>);
   return null;
 }
 
