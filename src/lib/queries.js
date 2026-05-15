@@ -247,6 +247,77 @@ export function useReactivateEmployee() {
   });
 }
 
+/* ---------- Sales uploads (Inside Sales weekly/monthly Excel) ---------- */
+
+export const qkSalesUploads = ["sales-uploads"];
+
+export function useSalesUploads() {
+  return useQuery({
+    queryKey: qkSalesUploads,
+    queryFn: () => api.get("/api/sales-uploads").then((r) => r.data),
+    enabled: auth.isLoggedIn(),
+  });
+}
+
+export function useUploadSalesSheet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ file, period_type, period_start, period_end, note }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("period_type", period_type || "weekly");
+      if (period_start) fd.append("period_start", period_start);
+      if (period_end) fd.append("period_end", period_end);
+      if (note) fd.append("note", note);
+      return api
+        .post("/api/sales-uploads", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+        .then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkSalesUploads });
+      toast.success("Sheet uploaded");
+    },
+    onError: (err) => toast.error(err.message || "Failed to upload sheet"),
+  });
+}
+
+export function useDownloadSalesSheet() {
+  return useMutation({
+    mutationFn: async ({ id, filename }) => {
+      // Stream the file bytes back as a Blob, then trigger a browser-side
+      // download with the original filename so the URL stays clean
+      // (`/api/sales-uploads/{id}/download`) instead of a long presigned URL.
+      const response = await api.get(`/api/sales-uploads/${id}/download`, {
+        responseType: "blob",
+      });
+      const blob = response.data;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || `sales-sheet-${id}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+    onError: (err) => toast.error(err.message || "Failed to download file"),
+  });
+}
+
+export function useDeleteSalesSheet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api.delete(`/api/sales-uploads/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkSalesUploads });
+      toast.success("Sheet deleted");
+    },
+    onError: (err) => toast.error(err.message || "Failed to delete sheet"),
+  });
+}
+
 export function useApplyLeave() {
   const qc = useQueryClient();
   return useMutation({
