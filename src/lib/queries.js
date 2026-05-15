@@ -149,6 +149,104 @@ export function useSubmitReport() {
   });
 }
 
+/* ---------- HR admin: department + employee CRUD ---------- */
+
+function _invalidateRoster(qc) {
+  qc.invalidateQueries({ queryKey: ["employees"] });
+  qc.invalidateQueries({ queryKey: ["departments"] });
+}
+
+export function useCreateDepartment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) =>
+      api.post("/api/departments", payload).then((r) => r.data),
+    onSuccess: (d) => {
+      _invalidateRoster(qc);
+      toast.success(`Department "${d.name}" created`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to create department"),
+  });
+}
+
+export function useUpdateDepartment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ slug, ...patch }) =>
+      api.patch(`/api/departments/${slug}`, patch).then((r) => r.data),
+    onSuccess: (d) => {
+      _invalidateRoster(qc);
+      toast.success(`Department "${d.name}" updated`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to update department"),
+  });
+}
+
+export function useDeleteDepartment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug) => api.delete(`/api/departments/${slug}`),
+    onSuccess: (_, slug) => {
+      _invalidateRoster(qc);
+      toast.success(`Department "${slug}" deleted`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to delete department"),
+  });
+}
+
+export function useCreateEmployee() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) =>
+      api.post("/api/employees", payload).then((r) => r.data),
+    onSuccess: (u) => {
+      _invalidateRoster(qc);
+      toast.success(`Employee "${fullName(u)}" created`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to create employee"),
+  });
+}
+
+export function useUpdateEmployee() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }) =>
+      api.patch(`/api/employees/${id}`, patch).then((r) => r.data),
+    onSuccess: (u) => {
+      _invalidateRoster(qc);
+      qc.invalidateQueries({ queryKey: ["employee", u.id] });
+      toast.success(`Employee "${fullName(u)}" updated`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to update employee"),
+  });
+}
+
+export function useDeactivateEmployee() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) =>
+      api.patch(`/api/employees/${id}`, { is_active: false }).then((r) => r.data),
+    onSuccess: (u) => {
+      _invalidateRoster(qc);
+      toast.success(`Employee "${fullName(u)}" deactivated`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to deactivate employee"),
+  });
+}
+
+export function useReactivateEmployee() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) =>
+      api.patch(`/api/employees/${id}`, { is_active: true }).then((r) => r.data),
+    onSuccess: (u) => {
+      _invalidateRoster(qc);
+      toast.success(`Employee "${fullName(u)}" reactivated`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to reactivate employee"),
+  });
+}
+
 export function useApplyLeave() {
   const qc = useQueryClient();
   return useMutation({

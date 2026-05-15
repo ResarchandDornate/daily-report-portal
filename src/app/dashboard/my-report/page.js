@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   formatPretty,
   formatPrettyWithDay,
@@ -39,8 +39,23 @@ export default function MyReportPage() {
     [myReports]
   );
 
+  // After a successful submit we want the form to visually clear so the user
+  // sees "saved → blank slate" instead of staring at the values they just
+  // submitted.  The reports query re-fetches right after submit and would
+  // otherwise repopulate the form via the effect below — so we record the
+  // submitted date in a ref and have the effect skip exactly one auto-fill
+  // cycle for that date.  When the user later navigates back to that date
+  // (or any other date with existing data), normal auto-fill resumes.
+  const skipFillForDate = useRef(null);
+
   useEffect(() => {
     if (!me || fields.length === 0) return;
+    if (skipFillForDate.current === date) {
+      skipFillForDate.current = null;
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setForm(EMPTY);
+      return;
+    }
     const existing = myReports.find((r) => r.date === date);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm(existing ? { ...EMPTY, ...existing.data } : EMPTY);
@@ -60,6 +75,10 @@ export default function MyReportPage() {
     // Success / failure both fire toasts via useSubmitReport's onSuccess/onError.
     try {
       await submit.mutateAsync({ date, data: cleaned });
+      // Tell the auto-fill effect to leave the form blank for this date this
+      // one time — the user just submitted and wants a clean slate.
+      skipFillForDate.current = date;
+      setForm(EMPTY);
     } catch {
       // Toast already fired in the mutation's onError.
     }
@@ -76,6 +95,13 @@ export default function MyReportPage() {
 
   const lastIdx = fields.length - 1;
   const lastIsOdd = fields.length % 2 === 1 && fields.length > 1;
+
+  // Lock the form when a report already exists for this date AND the user
+  // isn't HR — employees can submit once per day and then need HR to edit.
+  // HR users can still edit their own reports as before.
+  const existingForDate = myReports.find((r) => r.date === date);
+  const isLocked = !!existingForDate && me.role !== "hr";
+  const isLeaveDay = existingForDate?.data?.__leave__ === "1";
 
   return (
     <div className="space-y-5">
@@ -106,6 +132,20 @@ export default function MyReportPage() {
         </div>
       </header>
 
+      {isLocked && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900">
+          <LockIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-700" />
+          <div>
+            <p className="font-semibold">
+              {isLeaveDay ? "You were on leave this day." : "Already submitted for this date."}
+            </p>
+            <p className="mt-0.5 text-[11px] text-amber-800">
+              You can&rsquo;t edit a past submission. If something needs fixing, ask your HR to update it.
+            </p>
+          </div>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="overflow-hidden rounded-lg border border-orange-100 surface-card">
         <div className="flex items-center gap-2 border-b border-orange-100 bg-brand-strip px-4 py-2.5">
           <span className="flex h-6 w-6 items-center justify-center rounded-md bg-orange-600 text-white">
@@ -113,6 +153,11 @@ export default function MyReportPage() {
           </span>
           <p className="text-xs font-semibold text-zinc-900">
             Report for <span className="text-orange-700">{formatPretty(date)}</span>
+            {isLocked && (
+              <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 ring-1 ring-amber-200">
+                <LockIcon className="h-2.5 w-2.5" /> Locked
+              </span>
+            )}
           </p>
         </div>
 
@@ -124,6 +169,7 @@ export default function MyReportPage() {
               label={field.label}
               value={form[field.key] || ""}
               onChange={(v) => update(field.key, v)}
+              disabled={isLocked}
               span={lastIsOdd && i === lastIdx ? "lg:col-span-2 lg:border-t lg:border-zinc-100" : ""}
             />
           ))}
@@ -132,13 +178,16 @@ export default function MyReportPage() {
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-orange-100 bg-brand-strip px-4 py-3">
           <p className="flex items-center gap-1.5 text-[11px] text-zinc-600">
             <InfoIcon className="h-3.5 w-3.5 text-orange-600" />
-            Reports save to the server. Submitting overwrites any previous entry for this date.
+            {isLocked
+              ? "Only HR can edit a submitted report."
+              : "Reports save to the server. You can submit only once per date — HR can edit later if needed."}
           </p>
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={() => setLeaveOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100"
+              disabled={isLocked}
+              className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
               <PalmIcon className="h-3.5 w-3.5" />
               Apply Leave
@@ -146,14 +195,15 @@ export default function MyReportPage() {
             <button
               type="button"
               onClick={clearForm}
-              className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              disabled={isLocked}
+              className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               Clear
             </button>
             <button
               type="submit"
-              disabled={submit.isPending}
-              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700 disabled:opacity-60"
+              disabled={submit.isPending || isLocked}
+              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {submit.isPending ? "Saving…" : "Submit report"}
             </button>
@@ -219,7 +269,7 @@ export default function MyReportPage() {
   );
 }
 
-function Field({ label, value, onChange, span = "", index = 0 }) {
+function Field({ label, value, onChange, span = "", index = 0, disabled = false }) {
   return (
     <div className={`bg-white p-4 transition hover:bg-stone-50/60 ${span}`}>
       <label className="flex items-center gap-2 text-xs font-medium text-zinc-700">
@@ -232,10 +282,24 @@ function Field({ label, value, onChange, span = "", index = 0 }) {
         value={value}
         onChange={(e) => onChange(e.target.value)}
         rows={3}
-        placeholder={`Add ${label.toLowerCase()}…`}
-        className="mt-1.5 block w-full resize-y rounded-md border border-zinc-200 bg-stone-50/60 px-2.5 py-1.5 text-xs leading-relaxed text-zinc-900 outline-none transition placeholder:text-zinc-400 focus:border-orange-500 focus:bg-white focus:ring-2 focus:ring-orange-500/20"
+        disabled={disabled}
+        placeholder={disabled ? "" : `Add ${label.toLowerCase()}…`}
+        className={`mt-1.5 block w-full resize-y rounded-md border border-zinc-200 px-2.5 py-1.5 text-xs leading-relaxed outline-none transition placeholder:text-zinc-400 focus:border-orange-500 focus:bg-white focus:ring-2 focus:ring-orange-500/20 ${
+          disabled
+            ? "cursor-not-allowed bg-zinc-100 text-zinc-600"
+            : "bg-stone-50/60 text-zinc-900"
+        }`}
       />
     </div>
+  );
+}
+
+function LockIcon({ className = "" }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
+      <rect x="5" y="11" width="14" height="10" rx="2" />
+      <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+    </svg>
   );
 }
 
