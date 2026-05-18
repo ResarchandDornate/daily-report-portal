@@ -16,6 +16,12 @@ import {
 import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
+// Departments excluded from the compliance summary strip at the top of this
+// page — they don't track daily reports, so HR doesn't need to monitor them
+// there.  Employees with no department are also dropped from the summary.
+// (They still appear normally in the table below and everywhere else.)
+const HIDDEN_FROM_COMPLIANCE = new Set(["support", "rd", "finance"]);
+
 export default function ReportsPage() {
   const [dept, setDept] = useState("all");
   const [employeeId, setEmployeeId] = useState("all");
@@ -68,8 +74,72 @@ export default function ReportsPage() {
   const { data: reports = [], total = 0, isFetching } = useReports(reportFilters);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
+  // Separate, unpaginated query JUST for the compliance summary strip —
+  // we need every report in the date/dept window to count distinct submitters
+  // per department, not only the current page's 50 rows.
+  const summaryFilters = useMemo(
+    () => ({
+      start,
+      end,
+      ...(dept !== "all" && { department: dept }),
+      ...(employeeId !== "all" && { employee: Number(employeeId) }),
+      limit: 5000,
+    }),
+    [start, end, dept, employeeId],
+  );
+  const { data: summaryReports = [] } = useReports(summaryFilters);
+
   const employeesById = useMemo(() => indexById(allEmployees), [allEmployees]);
   const deptsBySlug = useMemo(() => indexBySlug(departments), [departments]);
+
+  // Compliance summary — for each department in scope, how many people
+  // submitted at least one report in the current date / dept / employee filter.
+  // Departments listed in HIDDEN_FROM_COMPLIANCE don't track daily reports,
+  // so we exclude them from both the chip grid AND the overall headline.
+  const deptSummary = useMemo(() => {
+    const submitters = new Set(summaryReports.map((r) => r.user_id));
+    const inScope = allEmployees.filter((e) => {
+      if (e.is_active === false) return false;
+      if (dept !== "all" && e.department?.slug !== dept) return false;
+      if (employeeId !== "all" && String(e.id) !== String(employeeId)) return false;
+      // Drop departments that don't participate in daily report tracking
+      // (and employees with no department assigned).
+      const slug = e.department?.slug;
+      if (!slug) return false;
+      if (HIDDEN_FROM_COMPLIANCE.has(slug)) return false;
+      return true;
+    });
+    const byDept = {};
+    for (const emp of inScope) {
+      const d = emp.department;
+      const slug = d?.slug || "—";
+      if (!byDept[slug]) {
+        byDept[slug] = {
+          slug,
+          name: d?.name || "No department",
+          color: d?.color || "zinc",
+          total: 0,
+          submitted: 0,
+        };
+      }
+      byDept[slug].total += 1;
+      if (submitters.has(emp.id)) byDept[slug].submitted += 1;
+    }
+    return Object.values(byDept).sort((a, b) => {
+      const aPct = a.total ? a.submitted / a.total : -1;
+      const bPct = b.total ? b.submitted / b.total : -1;
+      if (bPct !== aPct) return bPct - aPct;
+      if (b.submitted !== a.submitted) return b.submitted - a.submitted;
+      return a.name.localeCompare(b.name);
+    });
+  }, [allEmployees, summaryReports, dept, employeeId]);
+
+  const overallSummary = useMemo(() => {
+    const total = deptSummary.reduce((s, d) => s + d.total, 0);
+    const submitted = deptSummary.reduce((s, d) => s + d.submitted, 0);
+    const pct = total ? Math.round((submitted / total) * 100) : 0;
+    return { total, submitted, pct, missing: total - submitted };
+  }, [deptSummary]);
 
   const employeeOptions = useMemo(
     () => (dept === "all" ? allEmployees : allEmployees.filter((e) => e.department?.slug === dept)),
@@ -184,6 +254,9 @@ export default function ReportsPage() {
           </button>
         </div>
       </header>
+
+      {/* Compliance summary — overall + per-department in this filter window */}
+      <ComplianceSummary overall={overallSummary} deptStats={deptSummary} />
 
       {/* Filters */}
       <div className="rounded-lg border border-zinc-200 surface-tinted p-3">
@@ -391,6 +464,72 @@ export default function ReportsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ComplianceSummary({ overall, deptStats }) {
+  if (overall.total === 0) {
+    return (
+      <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] text-zinc-500">
+        No employees match the current filter — nothing to summarise.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white p-4">
+      {/* Headline — overall stat as a clean hero line */}
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-zinc-100 pb-3">
+        <div>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">
+            Reports submitted in this range
+          </p>
+          <p className="mt-0.5 text-xl font-semibold tabular-nums text-zinc-900">
+            <span className="text-emerald-700">{overall.submitted}</span>
+            <span className="text-zinc-300"> / </span>
+            <span>{overall.total}</span>
+            <span className="ml-2 text-sm font-normal text-zinc-500">people</span>
+          </p>
+        </div>
+        {overall.missing > 0 && (
+          <p className="text-[11px] font-medium text-rose-600">{overall.missing} pending</p>
+        )}
+      </div>
+
+      {/* Per-department rows with thin progress bars — clean and scannable */}
+      <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 sm:grid-cols-2 lg:grid-cols-3">
+        {deptStats.map((d) => (
+          <DeptComplianceRow key={d.slug} d={d} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DeptComplianceRow({ d }) {
+  const pct = d.total ? Math.round((d.submitted / d.total) * 100) : 0;
+  const barColor =
+    pct >= 100 ? "bg-emerald-500"
+    : pct >= 50 ? "bg-amber-500"
+    : pct > 0 ? "bg-rose-500"
+    : "bg-zinc-300";
+  return (
+    <div title={`${d.submitted} of ${d.total} ${d.name} employees submitted at least one report`}>
+      <div className="flex items-baseline justify-between gap-2 text-[11px]">
+        <span className="flex items-center gap-1.5 truncate text-zinc-800">
+          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotBg(d.color)}`} />
+          <span className="truncate">{d.name}</span>
+        </span>
+        <span className="shrink-0 font-medium tabular-nums text-zinc-700">
+          {d.submitted}<span className="text-zinc-400">/{d.total}</span>
+        </span>
+      </div>
+      <div className="mt-1 h-1 overflow-hidden rounded-full bg-zinc-100">
+        <div
+          className={`h-full rounded-full ${barColor} transition-all`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
     </div>
   );
 }
