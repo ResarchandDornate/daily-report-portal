@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   formatPretty,
   formatPrettyWithDay,
@@ -69,9 +70,19 @@ export default function MyReportPage() {
     e.preventDefault();
     if (!me) return;
     const cleaned = {};
+    let hasAnyContent = false;
     fields.forEach((f) => {
-      cleaned[f.key] = form[f.key] || "";
+      const v = (form[f.key] || "").trim();
+      cleaned[f.key] = v;
+      if (v) hasAnyContent = true;
     });
+    // Don't submit an entirely empty report — at least one field must have
+    // content.  If the employee is on leave, they should use Apply Leave; for
+    // a normal report, blank-everything is almost always a mistake.
+    if (!hasAnyContent) {
+      toast.error("Please fill in at least one field before submitting.");
+      return;
+    }
     // Success / failure both fire toasts via useSubmitReport's onSuccess/onError.
     try {
       await submit.mutateAsync({ date, data: cleaned });
@@ -108,6 +119,11 @@ export default function MyReportPage() {
   // backdate without needing HR.
   const isPastDate = date < todayISO();
   const isBackdating = isPastDate && !existingForDate;
+
+  // Is at least one field filled?  Submit is disabled until this is true.
+  const hasAnyContent = fields.some(
+    (f) => (form[f.key] || "").trim() !== "",
+  );
 
   return (
     <div className="space-y-5">
@@ -227,7 +243,8 @@ export default function MyReportPage() {
             </button>
             <button
               type="submit"
-              disabled={submit.isPending || isLocked}
+              disabled={submit.isPending || isLocked || !hasAnyContent}
+              title={!hasAnyContent ? "Fill at least one field before submitting" : undefined}
               className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {submit.isPending ? "Saving…" : "Submit report"}
