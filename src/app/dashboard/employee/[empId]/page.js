@@ -18,7 +18,7 @@ import {
   shiftDays,
   todayISO,
 } from "@/lib/data";
-import { useEmployee, useMe, useReports, useSubmitReport } from "@/lib/queries";
+import { useDeleteReport, useEmployee, useMe, useReports, useSubmitReport } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function EmployeePage() {
@@ -47,6 +47,7 @@ export default function EmployeePage() {
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
   const submit = useSubmitReport();
+  const deleteReport = useDeleteReport();
   const [editing, setEditing] = useState(null); // null | the report row being edited
   const [editForm, setEditForm] = useState({});  // values keyed by field.key
 
@@ -69,6 +70,18 @@ export default function EmployeePage() {
       closeEdit();
     } catch {
       /* toast already fired by the mutation onError */
+    }
+  }
+  async function deleteEdit() {
+    if (!editing) return;
+    if (!confirm(
+      `Delete the report dated ${editing.date}? The employee will be able to submit a fresh one. This can’t be undone.`,
+    )) return;
+    try {
+      await deleteReport.mutateAsync(editing.id);
+      closeEdit();
+    } catch {
+      /* toast already fired */
     }
   }
 
@@ -430,7 +443,16 @@ export default function EmployeePage() {
               ))}
             </div>
 
-            <div className="flex items-center justify-end gap-2 border-t border-zinc-100 bg-stone-50 px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-100 bg-stone-50 px-4 py-3">
+              <button
+                onClick={deleteEdit}
+                disabled={deleteReport.isPending || submit.isPending}
+                title="Delete this report so the employee can submit a fresh one"
+                className="rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
+              >
+                {deleteReport.isPending ? "Deleting…" : "Delete report"}
+              </button>
+              <div className="flex items-center gap-2">
               <button
                 onClick={closeEdit}
                 className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
@@ -439,11 +461,12 @@ export default function EmployeePage() {
               </button>
               <button
                 onClick={saveEdit}
-                disabled={submit.isPending}
+                disabled={submit.isPending || deleteReport.isPending}
                 className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
               >
                 {submit.isPending ? "Saving…" : "Save"}
               </button>
+              </div>
             </div>
           </div>
         </div>

@@ -90,24 +90,38 @@ function OverviewContent() {
 
   const deptStats = useMemo(
     () =>
-      departments.map((d) => {
-        const inDept = employees.filter((e) => e.department?.slug === d.slug);
-        const submitted = inDept.filter((e) =>
-          selectedDateReports.some((r) => r.user_id === e.id)
-        ).length;
-        const onLeave = inDept.filter((e) =>
-          selectedDateReports.some(
-            (r) => r.user_id === e.id && r.data?.__leave__ === "1",
-          ),
-        ).length;
-        return {
-          ...d,
-          total: inDept.length,
-          submitted,
-          onLeave,
-          missing: inDept.length - submitted,
-        };
-      }),
+      departments
+        .map((d) => {
+          const inDept = employees.filter((e) => e.department?.slug === d.slug);
+          const submitted = inDept.filter((e) =>
+            selectedDateReports.some((r) => r.user_id === e.id)
+          ).length;
+          const onLeave = inDept.filter((e) =>
+            selectedDateReports.some(
+              (r) => r.user_id === e.id && r.data?.__leave__ === "1",
+            ),
+          ).length;
+          return {
+            ...d,
+            total: inDept.length,
+            submitted,
+            onLeave,
+            missing: inDept.length - submitted,
+          };
+        })
+        // Sort by completion PERCENTAGE descending so 100%-complete depts
+        // (e.g. 4/4) float above half-done (4/2) and lower (4/1), regardless
+        // of headcount.  Ties break by absolute submitted count, then total,
+        // then name.  Empty departments (0 employees) are pinned to the
+        // bottom because they have no work to evaluate.
+        .sort((a, b) => {
+          const aPct = a.total ? a.submitted / a.total : -1;
+          const bPct = b.total ? b.submitted / b.total : -1;
+          if (bPct !== aPct) return bPct - aPct;
+          if (b.submitted !== a.submitted) return b.submitted - a.submitted;
+          if (b.total !== a.total) return b.total - a.total;
+          return a.name.localeCompare(b.name);
+        }),
     [departments, employees, selectedDateReports]
   );
 
