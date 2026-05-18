@@ -25,6 +25,25 @@ export default function ReportsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [selectedReport, setSelectedReport] = useState(null);
+  // Client-side sort over the current page.
+  // Cycle on each click: ascending → descending → cleared (back to default).
+  // When sortKey is null, rows use the server's natural order (date desc).
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState("asc");
+  function toggleSort(key) {
+    if (sortKey !== key) {
+      setSortKey(key);
+      setSortDir("asc");
+      return;
+    }
+    if (sortDir === "asc") {
+      setSortDir("desc");
+      return;
+    }
+    // Third click on same column → clear sort, revert to natural order.
+    setSortKey(null);
+    setSortDir("asc");
+  }
 
   // Reset to page 1 whenever any filter changes — otherwise a narrow filter
   // could leave the user on a page that no longer exists.
@@ -82,7 +101,54 @@ export default function ReportsPage() {
     });
   }, [reports, query, employeesById]);
 
-  const visibleRows = filtered;
+  // Apply client-side sort over the current page's rows.  Numeric values are
+  // detected and sorted as numbers; everything else falls back to a
+  // case-insensitive string compare.  When sortKey is null (third click on
+  // the same column), we leave the rows in the server's natural order
+  // (date desc, user_id asc).
+  const sortedRows = useMemo(() => {
+    if (!sortKey) return filtered;
+    const rows = [...filtered];
+    rows.sort((a, b) => {
+      let av;
+      let bv;
+      if (sortKey === "date") {
+        av = a.date;
+        bv = b.date;
+      } else if (sortKey === "employee") {
+        av = (employeesById[a.user_id] ? fullName(employeesById[a.user_id]) : "").toLowerCase();
+        bv = (employeesById[b.user_id] ? fullName(employeesById[b.user_id]) : "").toLowerCase();
+      } else if (sortKey === "department") {
+        av = (employeesById[a.user_id]?.department?.name || "").toLowerCase();
+        bv = (employeesById[b.user_id]?.department?.name || "").toLowerCase();
+      } else {
+        // Report-field column — try numeric (stripping ₹, commas, spaces);
+        // fall back to lowercase string.
+        const sa = String(a.data?.[sortKey] ?? "").trim();
+        const sb = String(b.data?.[sortKey] ?? "").trim();
+        const na = Number(sa.replace(/[₹,\s]/g, ""));
+        const nb = Number(sb.replace(/[₹,\s]/g, ""));
+        const bothNumeric =
+          sa !== "" && sb !== "" && Number.isFinite(na) && Number.isFinite(nb);
+        if (bothNumeric) {
+          av = na;
+          bv = nb;
+        } else {
+          // Empty cells go to the bottom regardless of sort direction.
+          if (sa === "" && sb !== "") return 1;
+          if (sa !== "" && sb === "") return -1;
+          av = sa.toLowerCase();
+          bv = sb.toLowerCase();
+        }
+      }
+      if (av < bv) return sortDir === "asc" ? -1 : 1;
+      if (av > bv) return sortDir === "asc" ? 1 : -1;
+      return 0;
+    });
+    return rows;
+  }, [filtered, sortKey, sortDir, employeesById]);
+
+  const visibleRows = sortedRows;
 
   function exportCSV() {
     const csv = reportsToCSV(reports, { usersById: employeesById });
@@ -194,10 +260,16 @@ export default function ReportsPage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th>Date</Table.Th>
-              <Table.Th>Employee</Table.Th>
-              <Table.Th>Department</Table.Th>
-              <Table.Th>Summary</Table.Th>
+              <Table.Th className="min-w-[140px] whitespace-nowrap">
+                <SortButton label="Date" col="date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              </Table.Th>
+              <Table.Th className="min-w-[200px]">
+                <SortButton label="Employee" col="employee" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              </Table.Th>
+              <Table.Th className="min-w-[160px]">
+                <SortButton label="Department" col="department" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+              </Table.Th>
+              <Table.Th className="min-w-[280px]">Summary</Table.Th>
             </Table.Row>
           </Table.Head>
           <Table.Body>
@@ -249,10 +321,16 @@ export default function ReportsPage() {
               <Table.Head>
                 <Table.Row>
                   <Table.Th className="w-12 text-center">#</Table.Th>
-                  <Table.Th>Date</Table.Th>
-                  <Table.Th>Employee</Table.Th>
+                  <Table.Th className="min-w-[140px] whitespace-nowrap">
+                    <SortButton label="Date" col="date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  </Table.Th>
+                  <Table.Th className="min-w-[200px]">
+                    <SortButton label="Employee" col="employee" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                  </Table.Th>
                   {deptFields.map((f) => (
-                    <Table.Th key={f.key}>{f.label}</Table.Th>
+                    <Table.Th key={f.key} className="min-w-[180px]">
+                      <SortButton label={f.label} col={f.key} sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
+                    </Table.Th>
                   ))}
                 </Table.Row>
               </Table.Head>
@@ -314,6 +392,47 @@ export default function ReportsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function SortButton({ label, col, sortKey, sortDir, onClick }) {
+  const active = sortKey === col;
+  return (
+    <button
+      type="button"
+      onClick={() => onClick(col)}
+      className={`inline-flex w-full items-center justify-between gap-1.5 text-left transition hover:text-orange-700 ${
+        active ? "text-orange-700" : "text-zinc-700"
+      }`}
+      title={
+        active
+          ? `Sorted ${sortDir === "asc" ? "ascending" : "descending"} — click to ${sortDir === "asc" ? "switch to descending" : "clear sort"}`
+          : `Click to sort by ${label}`
+      }
+    >
+      <span>{label}</span>
+      <SortIcon active={active} dir={sortDir} />
+    </button>
+  );
+}
+
+function SortIcon({ active, dir }) {
+  // Stacked up + down arrow icon.  When the column is active, the matching
+  // arrow lights up orange and the other goes very faint.  When inactive,
+  // both arrows are mid-grey so the user can tell the column is sortable.
+  const upActive = active && dir === "asc";
+  const downActive = active && dir === "desc";
+  const upColor = upActive ? "text-orange-600" : active ? "text-zinc-300" : "text-zinc-400";
+  const downColor = downActive ? "text-orange-600" : active ? "text-zinc-300" : "text-zinc-400";
+  return (
+    <span className="inline-flex flex-col items-center leading-none">
+      <svg viewBox="0 0 8 5" className={`h-1.5 w-2 ${upColor} fill-current`} aria-hidden>
+        <path d="M0 5 L4 0 L8 5 Z" />
+      </svg>
+      <svg viewBox="0 0 8 5" className={`mt-0.5 h-1.5 w-2 ${downColor} fill-current`} aria-hidden>
+        <path d="M0 0 L4 5 L8 0 Z" />
+      </svg>
+    </span>
   );
 }
 
