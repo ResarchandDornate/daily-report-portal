@@ -58,21 +58,36 @@ export function formatPrettyWithDay(iso) {
 }
 
 export function getWeekRange(refIso = todayISO()) {
-  // "Weekly" = the most recent 5 working days (Mon–Fri).
-  // If refIso falls on Sat/Sun, slide the end to the prior Friday — nobody
-  // submits reports on weekends, so the range should land on workdays.
-  const end = new Date(refIso + "T00:00:00");
-  while (end.getDay() === 0 || end.getDay() === 6) {
-    end.setDate(end.getDate() - 1);
+  // "Weekly" = the CURRENT calendar week (Monday → today, capped at Friday).
+  // - Mon → Fri: range is this-week's-Mon → today
+  // - Sat / Sun: range is this-week's-Mon → this-week's-Fri (week is over)
+  //
+  // This matches what employees intuitively call "this week".  On Monday,
+  // before submitting, the X/5 badge is 0/5; after today's submission it
+  // becomes 1/5.  It only reaches 5/5 once the employee has submitted on
+  // each weekday from Monday to Friday.
+  const d = new Date(refIso + "T00:00:00");
+  const dow = d.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+
+  // Days to subtract to land on this week's Monday.
+  let mondayOffset;
+  if (dow === 0) {
+    mondayOffset = -6; // Sun → previous Monday (the week that just ended)
+  } else if (dow === 6) {
+    mondayOffset = -5; // Sat → this week's Monday
+  } else {
+    mondayOffset = -(dow - 1); // Mon-Fri → this week's Monday
   }
-  const start = new Date(end);
-  let collected = 1;
-  while (collected < 5) {
-    start.setDate(start.getDate() - 1);
-    if (start.getDay() !== 0 && start.getDay() !== 6) collected++;
-  }
-  const toIso = (d) => d.toISOString().slice(0, 10);
-  return { start: toIso(start), end: toIso(end), label: "Last 5 working days" };
+  const monday = new Date(d);
+  monday.setDate(monday.getDate() + mondayOffset);
+
+  // End: today (if we're mid-week) or this Friday (if weekend / today past Fri).
+  const friday = new Date(monday);
+  friday.setDate(friday.getDate() + 4);
+  const end = d <= friday ? d : friday;
+
+  const toIso = (x) => x.toISOString().slice(0, 10);
+  return { start: toIso(monday), end: toIso(end), label: "This week" };
 }
 
 export function getMonthRange(refIso = todayISO()) {

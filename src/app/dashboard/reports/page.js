@@ -333,16 +333,16 @@ export default function ReportsPage() {
           <Table.Head>
             <Table.Row>
               <Table.Th className="w-12 text-center">#</Table.Th>
-              <Table.Th className="min-w-[140px] whitespace-nowrap">
+              <Table.Th className="min-w-35 whitespace-nowrap">
                 <SortButton label="Date" col="date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               </Table.Th>
-              <Table.Th className="min-w-[200px]">
+              <Table.Th className="min-w-50">
                 <SortButton label="Employee" col="employee" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               </Table.Th>
-              <Table.Th className="min-w-[160px]">
+              <Table.Th className="min-w-40">
                 <SortButton label="Department" col="department" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
               </Table.Th>
-              <Table.Th className="min-w-[280px]">Summary</Table.Th>
+              <Table.Th className="min-w-70">Summary</Table.Th>
             </Table.Row>
           </Table.Head>
           <Table.Body>
@@ -394,14 +394,14 @@ export default function ReportsPage() {
               <Table.Head>
                 <Table.Row>
                   <Table.Th className="w-12 text-center">#</Table.Th>
-                  <Table.Th className="min-w-[140px] whitespace-nowrap">
+                  <Table.Th className="min-w-35 whitespace-nowrap">
                     <SortButton label="Date" col="date" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   </Table.Th>
-                  <Table.Th className="min-w-[200px]">
+                  <Table.Th className="min-w-50">
                     <SortButton label="Employee" col="employee" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                   </Table.Th>
                   {deptFields.map((f) => (
-                    <Table.Th key={f.key} className="min-w-[180px]">
+                    <Table.Th key={f.key} className="min-w-45">
                       <SortButton label={f.label} col={f.key} sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} />
                     </Table.Th>
                   ))}
