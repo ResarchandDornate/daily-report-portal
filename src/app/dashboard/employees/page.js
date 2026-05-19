@@ -29,24 +29,33 @@ export default function AllEmployeesPage() {
   const { data: employees = [], isLoading } = useEmployees({ include_inactive: showInactive });
   const { data: departments = [] } = useDepartments();
 
-  // "This week" attendance — fetch reports across the last 5 working days
-  // and build a per-employee count of distinct submission dates.
+  // "This week" attendance — fetch reports across the current calendar week
+  // (Mon → today) and tag each employee with the latest day-of-week index
+  // they're caught up to.  Denominator is always 5 (full Mon-Fri week);
+  // numerator is which weekday they've reached (Mon=1 ... Fri=5).
   const week = useMemo(() => getWeekRange(), []);
+  const weekTotal = 5;
   const { data: weekReports = [] } = useReports({ start: week.start, end: week.end });
   const submissionsByUser = useMemo(() => {
-    const map = {};
+    // We display "latest workday index reached this week" — so an employee
+    // who submitted today (Tuesday, day-2) shows 2/2 even if they skipped
+    // Monday.  Submitting today moves them up to the current day's count;
+    // missing today caps them at their last submission's day index.
+    const maxDowByUser = {};
     for (const r of weekReports) {
-      // Only Mon-Fri count toward the 5-working-day window — seed data
-      // (and any backfills) may include Sat / Sun rows.
       const dow = new Date(r.date + "T00:00:00").getDay();
-      if (dow === 0 || dow === 6) continue;
-      if (!map[r.user_id]) map[r.user_id] = new Set();
-      map[r.user_id].add(r.date);
+      if (dow === 0 || dow === 6) continue; // skip Sat/Sun
+      const dayIdx = dow; // Mon=1 ... Fri=5
+      if (dayIdx > (maxDowByUser[r.user_id] || 0)) {
+        maxDowByUser[r.user_id] = dayIdx;
+      }
     }
     const counts = {};
-    for (const [uid, set] of Object.entries(map)) counts[uid] = Math.min(set.size, 5);
+    for (const [uid, idx] of Object.entries(maxDowByUser)) {
+      counts[uid] = Math.min(idx, weekTotal);
+    }
     return counts;
-  }, [weekReports]);
+  }, [weekReports, weekTotal]);
 
   const organisations = useMemo(() => {
     const set = new Set();
@@ -215,7 +224,7 @@ export default function AllEmployeesPage() {
                     {emp.date_of_joining ? formatPrettyWithDay(emp.date_of_joining) : "—"}
                   </Table.Td>
                   <Table.Td className="align-top text-center">
-                    <WeekBadge count={submissionsByUser[emp.id] || 0} />
+                    <WeekBadge count={submissionsByUser[emp.id] || 0} total={weekTotal} />
                   </Table.Td>
                   <Table.Td className="align-top text-right">
                     <div className="flex items-center justify-end gap-2">
@@ -560,16 +569,18 @@ function CloseIcon({ className = "" }) {
   );
 }
 
-function WeekBadge({ count }) {
-  const total = 5;
+function WeekBadge({ count, total = 5 }) {
+  // Color reflects completeness vs the elapsed week so far:
+  // perfect attendance is always green regardless of which day it is.
   const tone =
-    count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    : count >= 3 ? "bg-amber-50 text-amber-800 ring-amber-200"
+    total === 0 ? "bg-zinc-100 text-zinc-500 ring-zinc-200"
+    : count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : count >= total - 1 && total >= 2 ? "bg-amber-50 text-amber-800 ring-amber-200"
     : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
     : "bg-zinc-100 text-zinc-500 ring-zinc-200";
   return (
     <span
-      title={`${count} of ${total} working days submitted this week`}
+      title={`${count} of ${total} working day${total === 1 ? "" : "s"} submitted so far this week`}
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
     >
       {count} / {total}

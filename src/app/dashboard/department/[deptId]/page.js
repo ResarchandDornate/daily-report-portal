@@ -35,6 +35,7 @@ export default function DepartmentPage() {
   const today = todayISO();
 
   const week = useMemo(() => getWeekRange(), []);
+  const weekTotal = 5; // full Mon-Fri week — numerator is "day index reached"
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -43,15 +44,18 @@ export default function DepartmentPage() {
         const empReports = reports.filter((r) => r.user_id === emp.id);
         const last = [...empReports].sort((a, b) => b.date.localeCompare(a.date))[0];
         const submittedToday = empReports.some((r) => r.date === today);
-        // Count distinct working-day submissions this week (max 5)
-        const weekDates = new Set();
+        // Use "latest workday index this week" as the numerator — so
+        // submitting today (e.g. Tue / day-2) reads as 2/2 even if Monday
+        // was skipped, and missing today caps the badge at the last
+        // submitted day's index.
+        let maxDow = 0;
         for (const r of empReports) {
           if (r.date < week.start || r.date > week.end) continue;
           const dow = new Date(r.date + "T00:00:00").getDay();
           if (dow === 0 || dow === 6) continue;
-          weekDates.add(r.date);
+          if (dow > maxDow) maxDow = dow; // Mon=1 ... Fri=5
         }
-        const weekCount = Math.min(weekDates.size, 5);
+        const weekCount = Math.min(maxDow, weekTotal);
         return {
           emp,
           totalReports: empReports.length,
@@ -68,7 +72,7 @@ export default function DepartmentPage() {
           (emp.email || "").toLowerCase().includes(q)
         );
       });
-  }, [employees, reports, today, query]);
+  }, [employees, reports, today, query, week, weekTotal]);
 
   if (deptsLoading) {
     return (
@@ -183,7 +187,7 @@ export default function DepartmentPage() {
                   )}
                 </Table.Td>
                 <Table.Td className="align-top text-center">
-                  <WeekBadge count={weekCount} />
+                  <WeekBadge count={weekCount} total={weekTotal} />
                 </Table.Td>
                 <Table.Td className="align-top font-medium text-zinc-800">{totalReports}</Table.Td>
                 <Table.Td className="align-top text-zinc-700">
@@ -374,16 +378,16 @@ function CloseIcon({ className = "" }) {
   );
 }
 
-function WeekBadge({ count }) {
-  const total = 5;
+function WeekBadge({ count, total = 5 }) {
   const tone =
-    count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    : count >= 3 ? "bg-amber-50 text-amber-800 ring-amber-200"
+    total === 0 ? "bg-zinc-100 text-zinc-500 ring-zinc-200"
+    : count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : count >= total - 1 && total >= 2 ? "bg-amber-50 text-amber-800 ring-amber-200"
     : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
     : "bg-zinc-100 text-zinc-500 ring-zinc-200";
   return (
     <span
-      title={`${count} of ${total} working days submitted this week`}
+      title={`${count} of ${total} working day${total === 1 ? "" : "s"} submitted so far this week`}
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
     >
       {count} / {total}

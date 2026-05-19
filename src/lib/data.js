@@ -34,7 +34,12 @@ export function todayISO() {
 export function shiftDays(iso, n) {
   const d = new Date(iso + "T00:00:00");
   d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+  // Use local components instead of toISOString — see getWeekRange comment
+  // below for why (timezone offset shifts the date in non-UTC locales).
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 export function formatPretty(iso) {
@@ -55,6 +60,27 @@ export function formatPrettyWithDay(iso) {
     month: "short",
     year: "numeric",
   });
+}
+
+/* How many working days (Mon-Fri) have elapsed in the current week so far,
+ * including today.  Used as the denominator of the "X / Y" attendance badge.
+ *
+ *   Mon → 1   (only today)
+ *   Tue → 2
+ *   Wed → 3
+ *   Thu → 4
+ *   Fri → 5   (full week so far)
+ *   Sat → 5   (the week just ended)
+ *   Sun → 5   (also the just-ended week)
+ *
+ * Matches getWeekRange()'s window: on a weekday it's today's day-of-week
+ * (1-5); on a weekend it's the previous full Mon-Fri (always 5).
+ */
+export function workdaysElapsedThisWeek(refIso = todayISO()) {
+  const d = new Date(refIso + "T00:00:00");
+  const dow = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  if (dow === 0 || dow === 6) return 5;
+  return dow; // 1..5
 }
 
 export function getWeekRange(refIso = todayISO()) {
@@ -86,7 +112,16 @@ export function getWeekRange(refIso = todayISO()) {
   friday.setDate(friday.getDate() + 4);
   const end = d <= friday ? d : friday;
 
-  const toIso = (x) => x.toISOString().slice(0, 10);
+  // IMPORTANT: format using local date components, not toISOString().
+  // toISOString() converts to UTC, which shifts the date by one day in
+  // any non-UTC timezone (e.g. IST is +5:30, so local midnight Tuesday
+  // becomes UTC Monday 18:30 → slice gives the wrong day).
+  const toIso = (x) => {
+    const y = x.getFullYear();
+    const m = String(x.getMonth() + 1).padStart(2, "0");
+    const day = String(x.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
   return { start: toIso(monday), end: toIso(end), label: "This week" };
 }
 
