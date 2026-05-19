@@ -31,6 +31,7 @@ export default function ReportsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [selectedReport, setSelectedReport] = useState(null);
+  const [drillDownDept, setDrillDownDept] = useState(null);  // dept slug being expanded
   // Client-side sort over the current page.
   // Cycle on each click: ascending → descending → cleared (back to default).
   // When sortKey is null, rows use the server's natural order (date desc).
@@ -256,7 +257,23 @@ export default function ReportsPage() {
       </header>
 
       {/* Compliance summary — overall + per-department in this filter window */}
-      <ComplianceSummary overall={overallSummary} deptStats={deptSummary} />
+      <ComplianceSummary
+        overall={overallSummary}
+        deptStats={deptSummary}
+        onPickDept={(slug) => setDrillDownDept(slug)}
+      />
+
+      {drillDownDept && (
+        <DeptDrillDownModal
+          slug={drillDownDept}
+          deptStats={deptSummary}
+          allEmployees={allEmployees}
+          summaryReports={summaryReports}
+          start={start}
+          end={end}
+          onClose={() => setDrillDownDept(null)}
+        />
+      )}
 
       {/* Filters */}
       <div className="rounded-lg border border-zinc-200 surface-tinted p-3">
@@ -468,7 +485,7 @@ export default function ReportsPage() {
   );
 }
 
-function ComplianceSummary({ overall, deptStats }) {
+function ComplianceSummary({ overall, deptStats, onPickDept }) {
   if (overall.total === 0) {
     return (
       <div className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] text-zinc-500">
@@ -499,14 +516,14 @@ function ComplianceSummary({ overall, deptStats }) {
       {/* Per-department rows with thin progress bars — clean and scannable */}
       <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-2.5 sm:grid-cols-2 lg:grid-cols-3">
         {deptStats.map((d) => (
-          <DeptComplianceRow key={d.slug} d={d} />
+          <DeptComplianceRow key={d.slug} d={d} onClick={() => onPickDept(d.slug)} />
         ))}
       </div>
     </div>
   );
 }
 
-function DeptComplianceRow({ d }) {
+function DeptComplianceRow({ d, onClick }) {
   const pct = d.total ? Math.round((d.submitted / d.total) * 100) : 0;
   const barColor =
     pct >= 100 ? "bg-emerald-500"
@@ -514,7 +531,12 @@ function DeptComplianceRow({ d }) {
     : pct > 0 ? "bg-rose-500"
     : "bg-zinc-300";
   return (
-    <div title={`${d.submitted} of ${d.total} ${d.name} employees submitted at least one report`}>
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-md px-1.5 py-1 text-left transition hover:bg-zinc-50 focus:bg-zinc-50 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+      title={`Click to see who submitted vs missing in ${d.name}`}
+    >
       <div className="flex items-baseline justify-between gap-2 text-[11px]">
         <span className="flex items-center gap-1.5 truncate text-zinc-800">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dotBg(d.color)}`} />
@@ -530,7 +552,228 @@ function DeptComplianceRow({ d }) {
           style={{ width: `${pct}%` }}
         />
       </div>
+    </button>
+  );
+}
+
+function DeptDrillDownModal({ slug, deptStats, allEmployees, summaryReports, start, end, onClose }) {
+  const dept = deptStats.find((d) => d.slug === slug);
+
+  // Build the employee list for this dept, splitting by "submitted at least
+  // once in range" vs "not submitted at all in range".
+  const { submitted, missing, reportsByUser } = useMemo(() => {
+    const inDept = allEmployees.filter(
+      (e) => e.is_active !== false && e.department?.slug === slug,
+    );
+    const map = {};
+    for (const r of summaryReports) map[r.user_id] = (map[r.user_id] || []).concat(r);
+    // Reports per user, newest first.
+    Object.keys(map).forEach((uid) => {
+      map[uid].sort((a, b) => b.date.localeCompare(a.date));
+    });
+    const submittedList = inDept.filter((e) => (map[e.id] || []).length > 0)
+      .sort((a, b) => (map[b.id]?.length || 0) - (map[a.id]?.length || 0));
+    const missingList = inDept.filter((e) => !(map[e.id] && map[e.id].length))
+      .sort((a, b) => fullName(a).localeCompare(fullName(b)));
+    return { submitted: submittedList, missing: missingList, reportsByUser: map };
+  }, [allEmployees, summaryReports, slug]);
+
+  const [expanded, setExpanded] = useState(null); // user_id whose reports are expanded
+  function toggleExpand(uid) {
+    setExpanded((cur) => (cur === uid ? null : uid));
+  }
+
+  if (!dept) return null;
+
+  const reportFields = (() => {
+    // Pull fields from any submitter (they all share the dept's report_fields).
+    const anyEmp = allEmployees.find((e) => e.department?.slug === slug);
+    return getReportFields(anyEmp?.department);
+  })();
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 px-3 pb-8 pt-12" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[88vh] w-full max-w-7xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+      >
+        {/* Header — compact */}
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-5 py-2.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 shrink-0 rounded-full ${dotBg(dept.color)}`} />
+              <h2 className="text-sm font-semibold text-zinc-900">{dept.name}</h2>
+            </div>
+            <p className="mt-0.5 text-[11px] text-zinc-700">
+              <span className="font-medium">{formatPretty(start)} → {formatPretty(end)}</span>
+              <span className="mx-1.5 text-zinc-300">·</span>
+              <span className="font-semibold text-emerald-700">{dept.submitted}</span> submitted
+              <span className="mx-1.5 text-zinc-300">·</span>
+              <span className="font-semibold text-rose-600">{dept.total - dept.submitted}</span> missing
+              <span className="mx-1.5 text-zinc-300">·</span>
+              <span>{dept.total} total</span>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M6 18 18 6" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body — submitted list, then missing list */}
+        <div className="flex-1 overflow-auto bg-stone-50/40">
+          {submitted.length > 0 && (
+            <DrillSection title="Submitted" count={submitted.length} tone="emerald">
+              {submitted.map((emp) => (
+                <DrillRow
+                  key={emp.id}
+                  emp={emp}
+                  reports={reportsByUser[emp.id] || []}
+                  fields={reportFields}
+                  expanded={expanded === emp.id}
+                  onToggle={() => toggleExpand(emp.id)}
+                />
+              ))}
+            </DrillSection>
+          )}
+          {missing.length > 0 && (
+            <DrillSection title="Missing" count={missing.length} tone="rose">
+              {missing.map((emp) => (
+                <DrillRow
+                  key={emp.id}
+                  emp={emp}
+                  reports={[]}
+                  fields={reportFields}
+                  expanded={false}
+                  onToggle={() => {}}
+                  disabled
+                />
+              ))}
+            </DrillSection>
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+function DrillSection({ title, count, tone, children }) {
+  const toneCls = {
+    emerald: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+    rose: "bg-rose-50 text-rose-700 ring-rose-200",
+  }[tone] || "bg-zinc-100 text-zinc-700 ring-zinc-200";
+  return (
+    <section className="border-b border-zinc-200 last:border-b-0">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-zinc-200 bg-white px-5 py-1.5">
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-zinc-700">{title}</h3>
+        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${toneCls}`}>
+          {count}
+        </span>
+      </div>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+function DrillRow({ emp, reports, fields, expanded, onToggle, disabled }) {
+  return (
+    <div className="border-b border-zinc-100 last:border-b-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={disabled}
+        className={`flex w-full items-center justify-between gap-3 px-5 py-1.5 text-left transition ${
+          disabled ? "cursor-default" : "hover:bg-orange-50/40"
+        }`}
+      >
+        <div className="flex min-w-0 items-center gap-2.5">
+          {!disabled && (
+            <span className={`text-[10px] text-zinc-400 transition-transform ${expanded ? "rotate-90" : ""}`}>
+              ▸
+            </span>
+          )}
+          <Avatar name={fullName(emp)} />
+          <div className="min-w-0 leading-tight">
+            <div className="truncate text-[12px] font-semibold text-zinc-900">{fullName(emp)}</div>
+            {emp.title && (
+              <div className="truncate text-[10px] text-zinc-500">{emp.title}</div>
+            )}
+          </div>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+            disabled
+              ? "bg-zinc-100 text-zinc-500"
+              : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+          }`}
+        >
+          {disabled
+            ? "no reports"
+            : `${reports.length} ${reports.length === 1 ? "report" : "reports"}`}
+        </span>
+      </button>
+
+      {expanded && reports.length > 0 && (
+        <div className="border-t border-zinc-100 bg-stone-50/60 px-5 py-2">
+          <div className="overflow-x-auto rounded-md border border-zinc-200 bg-white">
+            <table className="w-full border-collapse text-[11px]">
+              <thead>
+                <tr className="bg-zinc-50 text-left text-zinc-600">
+                  <th className="whitespace-nowrap border-b border-r border-zinc-200 px-2.5 py-1.5 font-semibold last:border-r-0">
+                    Date
+                  </th>
+                  {fields.map((f) => (
+                    <th
+                      key={f.key}
+                      className="whitespace-nowrap border-b border-r border-zinc-200 px-2.5 py-1.5 font-semibold last:border-r-0"
+                    >
+                      {f.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {reports.map((r) => (
+                  <tr key={r.id} className="text-zinc-800 hover:bg-stone-50/60">
+                    <td className="whitespace-nowrap border-b border-r border-zinc-100 px-2.5 py-1.5 font-medium text-zinc-900 last:border-r-0">
+                      {formatPretty(r.date)}
+                    </td>
+                    {fields.map((f) => (
+                      <td
+                        key={f.key}
+                        className="min-w-[160px] border-b border-r border-zinc-100 px-2.5 py-1.5 align-top last:border-r-0"
+                      >
+                        {r.data?.[f.key] || "—"}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Avatar({ name }) {
+  const initials = (name || "—")
+    .split(" ")
+    .map((n) => n[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+  return (
+    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-orange-600 text-[9px] font-semibold text-white">
+      {initials}
+    </span>
   );
 }
 
