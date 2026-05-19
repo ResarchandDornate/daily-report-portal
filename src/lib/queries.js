@@ -109,6 +109,11 @@ export function useReports(filters = {}) {
     queryFn: () => api.get("/api/reports", { params: filters }).then((r) => r.data),
     enabled: auth.isLoggedIn(),
     placeholderData: (prev) => prev,
+    // Auto-refresh every 30s so an HR user watching the dashboard sees new
+    // submissions land within half a minute, without manually refreshing.
+    // Also refetches on window-focus (TanStack's default).
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
   // Backend returns `{ items, total, limit, offset }`. Unwrap items as `data`
   // so existing consumers iterating the array keep working; expose pagination
