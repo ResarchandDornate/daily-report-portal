@@ -333,11 +333,12 @@ export default function MyReportPage() {
               {fields.map((f) => (
                 <Table.Th key={f.key} className="min-w-60">{f.label}</Table.Th>
               ))}
+              <Table.Th className="w-20 whitespace-nowrap text-right">Actions</Table.Th>
             </Table.Row>
           </Table.Head>
           <Table.Body>
             {sortedReports.length === 0 ? (
-              <Table.Empty colSpan={2 + fields.length} message="No reports yet. Fill in the form above to get started." />
+              <Table.Empty colSpan={3 + fields.length} message="No reports yet. Fill in the form above to get started." />
             ) : (
               sortedReports.map((r, i) => (
                 <Table.Row key={r.id}>
@@ -350,6 +351,24 @@ export default function MyReportPage() {
                       {r.data?.[f.key] || "—"}
                     </Table.Td>
                   ))}
+                  <Table.Td className="align-top text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDate(r.date);
+                        setIsEditingExisting(true);
+                        // Scroll the form into view so the user sees the
+                        // edit banner + fields right away.
+                        if (typeof window !== "undefined") {
+                          window.scrollTo({ top: 0, behavior: "smooth" });
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border border-orange-300 bg-orange-50 px-2 py-0.5 text-[11px] font-medium text-orange-700 hover:bg-orange-100"
+                    >
+                      <PencilIcon className="h-3 w-3" />
+                      Edit
+                    </button>
+                  </Table.Td>
                 </Table.Row>
               ))
             )}
