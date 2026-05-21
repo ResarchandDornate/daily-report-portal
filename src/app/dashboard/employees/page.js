@@ -6,13 +6,17 @@ import { formatPrettyWithDay, fullName, getWeekRange } from "@/lib/data";
 import {
   useCreateDepartment,
   useCreateEmployee,
+  useCreateOrganisation,
   useDeactivateEmployee,
+  useDeleteOrganisation,
   useDepartments,
   useEmployees,
   useMe,
+  useOrganisations,
   useReactivateEmployee,
   useReports,
   useUpdateEmployee,
+  useUpdateOrganisation,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -23,11 +27,13 @@ export default function AllEmployeesPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [empModal, setEmpModal] = useState(null); // { mode: "add" | "edit", employee? }
   const [deptModalOpen, setDeptModalOpen] = useState(false);
+  const [orgModalOpen, setOrgModalOpen] = useState(false);
 
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
   const { data: employees = [], isLoading } = useEmployees({ include_inactive: showInactive });
   const { data: departments = [] } = useDepartments();
+  const { data: organisations = [] } = useOrganisations();
 
   // "This week" attendance — fetch reports across the current calendar week
   // (Mon → today) and tag each employee with the latest day-of-week index
@@ -57,11 +63,6 @@ export default function AllEmployeesPage() {
     return counts;
   }, [weekReports, weekTotal]);
 
-  const organisations = useMemo(() => {
-    const set = new Set();
-    employees.forEach((e) => { if (e.organisation) set.add(e.organisation); });
-    return [...set].sort();
-  }, [employees]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -102,6 +103,13 @@ export default function AllEmployeesPage() {
           {isHR && (
             <div className="flex items-center gap-2">
               <button
+                onClick={() => setOrgModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                <PlusIcon className="h-3.5 w-3.5" />
+                Organisations
+              </button>
+              <button
                 onClick={() => setDeptModalOpen(true)}
                 className="inline-flex items-center gap-1.5 rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
               >
@@ -139,7 +147,7 @@ export default function AllEmployeesPage() {
         >
           <option value="all">All organisations</option>
           {organisations.map((o) => (
-            <option key={o} value={o}>{o}</option>
+            <option key={o.id} value={o.name}>{o.name}</option>
           ))}
         </select>
         <select
@@ -261,6 +269,7 @@ export default function AllEmployeesPage() {
           mode={empModal.mode}
           employee={empModal.employee}
           departments={departments}
+          organisations={organisations}
           onClose={() => setEmpModal(null)}
         />
       )}
@@ -269,6 +278,14 @@ export default function AllEmployeesPage() {
         <DepartmentFormModal
           mode="add"
           onClose={() => setDeptModalOpen(false)}
+        />
+      )}
+
+      {orgModalOpen && (
+        <OrganisationsModal
+          organisations={organisations}
+          employees={employees}
+          onClose={() => setOrgModalOpen(false)}
         />
       )}
     </div>
@@ -282,7 +299,7 @@ const inputClass =
 
 const labelClass = "block text-[10px] font-medium uppercase tracking-wider text-zinc-500";
 
-function EmployeeFormModal({ mode, employee, departments, onClose }) {
+function EmployeeFormModal({ mode, employee, departments, organisations = [], onClose }) {
   const isEdit = mode === "edit";
   const [form, setForm] = useState(() => ({
     first_name: employee?.first_name || "",
@@ -403,7 +420,25 @@ function EmployeeFormModal({ mode, employee, departments, onClose }) {
           </div>
           <div>
             <label className={labelClass}>Organisation</label>
-            <input className={`mt-1 ${inputClass}`} value={form.organisation} onChange={(e) => up("organisation", e.target.value)} placeholder="Ornate" />
+            <select
+              className={`mt-1 ${inputClass}`}
+              value={form.organisation || ""}
+              onChange={(e) => up("organisation", e.target.value)}
+            >
+              <option value="">— None —</option>
+              {organisations.map((o) => (
+                <option key={o.id} value={o.name}>{o.name}</option>
+              ))}
+              {/* If the existing value isn't in the canonical list (e.g. an
+                  older employee with a typo'd org), still show it so the
+                  field can be persisted without forcing a change. */}
+              {form.organisation && !organisations.some((o) => o.name === form.organisation) && (
+                <option value={form.organisation}>{form.organisation} (legacy)</option>
+              )}
+            </select>
+            <p className="mt-1 text-[10px] text-zinc-500">
+              Manage the list via the &ldquo;Organisations&rdquo; button on All Employees.
+            </p>
           </div>
           <div>
             <label className={labelClass}>Reporting manager</label>
@@ -453,6 +488,190 @@ function EmployeeFormModal({ mode, employee, departments, onClose }) {
           </div>
         </div>
       </form>
+    </div>
+  );
+}
+
+function OrganisationsModal({ organisations, employees, onClose }) {
+  const [newName, setNewName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState("");
+  const create = useCreateOrganisation();
+  const update = useUpdateOrganisation();
+  const del = useDeleteOrganisation();
+
+  // Count how many employees reference each organisation by name — used
+  // to show a usage hint and block delete when an org is still in use.
+  const usageByName = useMemo(() => {
+    const counts = {};
+    for (const e of employees) {
+      const n = (e.organisation || "").trim();
+      if (!n) continue;
+      counts[n] = (counts[n] || 0) + 1;
+    }
+    return counts;
+  }, [employees]);
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    const n = newName.trim();
+    if (!n) return;
+    try {
+      await create.mutateAsync({ name: n, color: "zinc" });
+      setNewName("");
+    } catch {}
+  }
+
+  function startEdit(org) {
+    setEditingId(org.id);
+    setEditName(org.name);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditName("");
+  }
+  async function saveEdit() {
+    const n = editName.trim();
+    if (!n) return;
+    try {
+      await update.mutateAsync({ id: editingId, name: n });
+      cancelEdit();
+    } catch {}
+  }
+  async function handleDelete(org) {
+    const inUse = usageByName[org.name] || 0;
+    if (inUse > 0) {
+      alert(`Can't delete "${org.name}" — ${inUse} employee(s) still belong to this organisation. Reassign them first.`);
+      return;
+    }
+    if (!confirm(`Delete organisation "${org.name}"?`)) return;
+    try {
+      await del.mutateAsync(org.id);
+    } catch {}
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-orange-50 px-4 py-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-orange-700">Manage</p>
+            <h2 className="mt-0.5 text-base font-semibold text-zinc-900">Organisations</h2>
+            <p className="text-[11px] text-zinc-600">Add, rename, or delete. Renames don&rsquo;t update employees automatically.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900">
+            <CloseIcon className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Add new */}
+        <form onSubmit={handleCreate} className="flex items-center gap-2 border-b border-zinc-100 bg-stone-50/60 px-4 py-3">
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Organisation name"
+            className={inputClass}
+          />
+          <button
+            type="submit"
+            disabled={!newName.trim() || create.isPending}
+            className="shrink-0 rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+          >
+            {create.isPending ? "Adding…" : "Add"}
+          </button>
+        </form>
+
+        {/* Existing list */}
+        <div className="flex-1 overflow-auto">
+          {organisations.length === 0 ? (
+            <p className="px-4 py-6 text-center text-[11px] text-zinc-500">
+              No organisations yet. Add the first one above.
+            </p>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {organisations.map((org) => {
+                const usage = usageByName[org.name] || 0;
+                const isEditing = editingId === org.id;
+                return (
+                  <li key={org.id} className="flex items-center justify-between gap-2 px-4 py-2 text-[12px]">
+                    {isEditing ? (
+                      <input
+                        type="text"
+                        value={editName}
+                        onChange={(e) => setEditName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { e.preventDefault(); saveEdit(); }
+                          if (e.key === "Escape") cancelEdit();
+                        }}
+                        autoFocus
+                        className="flex-1 rounded-md border border-orange-300 bg-white px-2 py-1 text-xs outline-none focus:border-orange-500"
+                      />
+                    ) : (
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium text-zinc-900">{org.name}</p>
+                        <p className="text-[10px] text-zinc-500">
+                          {usage === 0 ? "Unused" : `${usage} employee${usage === 1 ? "" : "s"}`}
+                        </p>
+                      </div>
+                    )}
+                    <div className="flex shrink-0 items-center gap-1">
+                      {isEditing ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={saveEdit}
+                            disabled={update.isPending || !editName.trim()}
+                            className="rounded-md bg-orange-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+                          >
+                            Save
+                          </button>
+                          <button
+                            type="button"
+                            onClick={cancelEdit}
+                            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => startEdit(org)}
+                            className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(org)}
+                            disabled={usage > 0 || del.isPending}
+                            title={usage > 0 ? `In use by ${usage} employee(s)` : "Delete"}
+                            className="rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end border-t border-zinc-200 bg-zinc-50 px-4 py-2.5">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Done
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

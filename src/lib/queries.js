@@ -10,6 +10,7 @@ import { formatPretty, fullName } from "./data";
 export const qk = {
   me: ["me"],
   departments: ["departments"],
+  organisations: ["organisations"],
   employees: (filters) => ["employees", filters || {}],
   employee: (id) => ["employee", id],
   reports: (filters) => ["reports", filters || {}],
@@ -87,6 +88,15 @@ export function useDepartments() {
   });
 }
 
+export function useOrganisations() {
+  return useQuery({
+    queryKey: qk.organisations,
+    queryFn: () => api.get("/api/organisations").then((r) => r.data),
+    enabled: auth.isLoggedIn(),
+    staleTime: 5 * 60_000,
+  });
+}
+
 export function useEmployees(filters = {}) {
   return useQuery({
     queryKey: qk.employees(filters),
@@ -159,6 +169,49 @@ export function useSubmitReport() {
 function _invalidateRoster(qc) {
   qc.invalidateQueries({ queryKey: ["employees"] });
   qc.invalidateQueries({ queryKey: ["departments"] });
+}
+
+function _invalidateOrgs(qc) {
+  qc.invalidateQueries({ queryKey: ["organisations"] });
+  qc.invalidateQueries({ queryKey: ["employees"] });
+}
+
+export function useCreateOrganisation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (payload) =>
+      api.post("/api/organisations", payload).then((r) => r.data),
+    onSuccess: (o) => {
+      _invalidateOrgs(qc);
+      toast.success(`Organisation "${o.name}" created`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to create organisation"),
+  });
+}
+
+export function useUpdateOrganisation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }) =>
+      api.patch(`/api/organisations/${id}`, patch).then((r) => r.data),
+    onSuccess: (o) => {
+      _invalidateOrgs(qc);
+      toast.success(`Organisation "${o.name}" updated`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to update organisation"),
+  });
+}
+
+export function useDeleteOrganisation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api.delete(`/api/organisations/${id}`),
+    onSuccess: () => {
+      _invalidateOrgs(qc);
+      toast.success("Organisation deleted");
+    },
+    onError: (err) => toast.error(err.message || "Failed to delete organisation"),
+  });
 }
 
 export function useCreateDepartment() {
