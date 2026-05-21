@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -50,6 +50,7 @@ function OverviewContent() {
 
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
+  const [selectedReport, setSelectedReport] = useState(null);
 
   // For HR: fetch everything. For employees: fetch only their own reports.
   const { data: departments = [] } = useDepartments();
@@ -125,11 +126,20 @@ function OverviewContent() {
     [departments, employees, selectedDateReports]
   );
 
-  // HR sees the latest 8 across the company; employees see ALL of their own
-  // reports (typically a few dozen, capped at the API's 1000-row default).
+  // HR sees ALL submissions for the selected date (newest first), so they
+  // can scan the day's activity without artificially capping at 8 rows.
+  // Employees see ALL of their own reports across dates.
   const recent = useMemo(
-    () => [...reports].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8),
-    [reports]
+    () =>
+      [...selectedDateReports].sort((a, b) => {
+        // Sort by submitted_at desc so the most recently submitted report
+        // is at the top; fall back to user_id for deterministic ordering.
+        const ta = a.submitted_at || "";
+        const tb = b.submitted_at || "";
+        if (tb !== ta) return tb.localeCompare(ta);
+        return a.user_id - b.user_id;
+      }),
+    [selectedDateReports]
   );
   const myRecent = useMemo(
     () => [...reports].sort((a, b) => b.date.localeCompare(a.date)),
@@ -279,10 +289,10 @@ function OverviewContent() {
           with department-specific report-field columns. */}
       <Card>
         <CardHeader
-          title={isHR ? "Recent submissions" : "My recent submissions"}
+          title={isHR ? `Submissions for ${formatPretty(selectedDate)}` : "My recent submissions"}
           subtitle={
             isHR
-              ? "Latest 8 reports from across the company"
+              ? `${recent.length} ${recent.length === 1 ? "report" : "reports"} submitted ${isToday ? "today" : `on ${formatPretty(selectedDate)}`}`
               : `Your ${myRecent.length} daily report${myRecent.length === 1 ? "" : "s"}${me.department ? ` — ${me.department.name}` : ""}`
           }
           right={
@@ -322,21 +332,22 @@ function OverviewContent() {
                     .slice(0, 2)
                     .join("  ·  ") || "—";
                   return (
-                    <Table.Row key={r.id}>
+                    <Table.Row
+                      key={r.id}
+                      onClick={() => setSelectedReport(r)}
+                      className="cursor-pointer"
+                    >
                       <Table.Td className="text-center font-medium text-zinc-500">{i + 1}</Table.Td>
                       <Table.Td className="whitespace-nowrap font-medium text-zinc-800">
                         {formatPrettyWithDay(r.date)}
                       </Table.Td>
                       <Table.Td>
-                        <Link
-                          href={emp ? `/dashboard/employee/${emp.id}` : "#"}
-                          className="flex items-center gap-2 hover:text-orange-700"
-                        >
+                        <div className="flex items-center gap-2">
                           <Avatar name={emp ? fullName(emp) : "—"} />
-                          <span className="font-medium text-zinc-900 hover:text-orange-700">
+                          <span className="font-medium text-zinc-900">
                             {emp ? fullName(emp) : `User #${r.user_id}`}
                           </span>
-                        </Link>
+                        </div>
                       </Table.Td>
                       <Table.Td>
                         <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${badgeBg(dept?.color)}`}>
@@ -390,11 +401,99 @@ function OverviewContent() {
           </Table>
         )}
       </Card>
+
+      {selectedReport && (
+        <ReportDetailModal
+          report={selectedReport}
+          employee={employeesById[selectedReport.user_id]}
+          onClose={() => setSelectedReport(null)}
+        />
+      )}
     </div>
   );
 }
 
 /* ---------- Components ---------- */
+
+function ReportDetailModal({ report, employee, onClose }) {
+  const dept = employee?.department;
+  const fields = getReportFields(dept);
+  const submitted = report.submitted_at ? new Date(report.submitted_at) : null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-200 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-orange-700">
+              Daily Report · {formatPretty(report.date)}
+            </p>
+            <h2 className="mt-0.5 truncate text-base font-semibold text-zinc-900">
+              {employee ? fullName(employee) : `User #${report.user_id}`}
+            </h2>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-zinc-600">
+              {dept && (
+                <span className={`inline-flex items-center gap-1.5 rounded-full px-1.5 py-0.5 ${badgeBg(dept.color)}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${dotBg(dept.color)}`} />
+                  {dept.name}
+                </span>
+              )}
+              {employee?.title && <span>· {employee.title}</span>}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="shrink-0 rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-900"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M6 18 18 6" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Body — one line per field */}
+        <div className="flex-1 overflow-auto bg-white px-5 py-4">
+          {fields.length === 0 ? (
+            <p className="text-xs text-zinc-500">No report fields defined for this department.</p>
+          ) : (
+            <p className="text-[13px] leading-7 text-zinc-800">
+              {fields.map((f) => {
+                const val = report.data?.[f.key];
+                const display = (typeof val === "string" && val.trim()) ? val : "—";
+                return (
+                  <span key={f.key} className="block">
+                    <span className="font-semibold text-zinc-900">{f.label}:</span>{" "}
+                    <span className="whitespace-pre-wrap text-zinc-700">{display}</span>
+                  </span>
+                );
+              })}
+            </p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-white px-4 py-2.5">
+          <p className="text-[11px] text-zinc-500">
+            {submitted ? `Submitted ${submitted.toLocaleString("en-IN")}` : "—"}
+          </p>
+          <button
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function StatCard({ label, value, hint, tone = "zinc", icon, href }) {
   const map = {
