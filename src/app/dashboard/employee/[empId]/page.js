@@ -375,25 +375,39 @@ export default function EmployeePage() {
             {filtered.length === 0 ? (
               <Table.Empty colSpan={2 + empFields.length + (isHR ? 1 : 0)} message="No reports in this range." />
             ) : (
-              filtered.map((r, i) => (
-                <Table.Row key={r.id}>
-                  <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
-                  <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPrettyWithDay(r.date)}</Table.Td>
-                  {empFields.map((f) => (
-                    <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
-                  ))}
-                  {isHR && (
-                    <Table.Td className="align-top text-right">
-                      <button
-                        onClick={() => openEdit(r)}
-                        className="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
+              filtered.map((r, i) => {
+                const isLeave = r.data?.__leave__ === "1";
+                return (
+                  <Table.Row key={r.id}>
+                    <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                    <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">{formatPrettyWithDay(r.date)}</Table.Td>
+                    {isLeave ? (
+                      // For leave rows, collapse all field columns into a
+                      // single "Absent" cell that spans the field area.
+                      <Table.Td
+                        colSpan={empFields.length}
+                        className="align-top"
                       >
-                        Edit
-                      </button>
-                    </Table.Td>
-                  )}
-                </Table.Row>
-              ))
+                        <span className="font-bold text-rose-600">Absent</span>
+                      </Table.Td>
+                    ) : (
+                      empFields.map((f) => (
+                        <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">{r.data?.[f.key] || "—"}</Table.Td>
+                      ))
+                    )}
+                    {isHR && (
+                      <Table.Td className="align-top text-right">
+                        <button
+                          onClick={() => openEdit(r)}
+                          className="rounded-md border border-zinc-300 bg-white px-2 py-0.5 text-[11px] font-medium text-zinc-700 hover:border-orange-300 hover:bg-orange-50 hover:text-orange-700"
+                        >
+                          Edit
+                        </button>
+                      </Table.Td>
+                    )}
+                  </Table.Row>
+                );
+              })
             )}
           </Table.Body>
         </Table>
