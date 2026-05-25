@@ -64,12 +64,12 @@ function Row({ children, className = "", ...props }) {
   );
 }
 
-function Th({ children, className = "" }) {
-  return <th className={`px-3 py-2.5 ${className}`}>{children}</th>;
+function Th({ children, className = "", ...props }) {
+  return <th className={`px-3 py-2.5 ${className}`} {...props}>{children}</th>;
 }
 
-function Td({ children, className = "" }) {
-  return <td className={`px-3 py-2.5 align-middle ${className}`}>{children}</td>;
+function Td({ children, className = "", ...props }) {
+  return <td className={`px-3 py-2.5 align-middle ${className}`} {...props}>{children}</td>;
 }
 
 function Empty({ message, colSpan = 1 }) {
