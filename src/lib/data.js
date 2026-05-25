@@ -209,7 +209,6 @@ export function buildSummaryText(reports, range, opts = {}) {
   if (peopleCount === 1 && reports[0]) {
     const onlyUser = usersById[reports[0].user_id];
     const dept = onlyUser?.department;
-    const ITEMS_PER_FIELD = 3;
     const fields = getReportFields(dept);
     for (const f of fields) {
       if (f.key === "challenges" || f.key === "remarks") continue; // closing sentence
@@ -218,6 +217,10 @@ export function buildSummaryText(reports, range, opts = {}) {
     }
   } else {
     // ─── Multi-employee path ───────────────────────────────────────────
+    // Per-employee breakdown: one section per submitter showing what
+    // they filled in across their reports.  Grouped by department for
+    // scan-ability so all of Sales clusters together, then Inside Sales,
+    // etc.
     const deptList = _joinList(deptNames);
     sentences.push(
       `Between ${startLabel} and ${endLabel}, ${peopleCount} ${peopleCount === 1 ? "employee" : "employees"} ` +
@@ -225,39 +228,47 @@ export function buildSummaryText(reports, range, opts = {}) {
       `(${deptList}) submitted ${totalReports} daily ${totalReports === 1 ? "report" : "reports"}.`
     );
 
-    // For company-wide summaries we cover the top 5 departments by volume.
-    // Inside each department, we now break the summary into one sub-sentence
-    // per column (report field) — so HR can see what each column contained.
-    const TOP_DEPTS = 5;
-    const ITEMS_PER_FIELD = 2; // distinct activities per field per department
-    const rankedDepts = [...deptNames].sort(
-      (a, b) => byDept[b].reports.length - byDept[a].reports.length,
-    );
-    const topDepts = rankedDepts.slice(0, TOP_DEPTS);
-    const restDepts = rankedDepts.slice(TOP_DEPTS);
-
-    for (const deptName of topDepts) {
-      const data = byDept[deptName];
-
-      // Look up this department's column definitions via any of its submitters.
-      const sampleUser = usersById[data.reports[0]?.user_id];
-      const fields = getReportFields(sampleUser?.department);
-
-      // Build one clause per column (e.g. "Meeting: a, b. Revenue: c.").
-      const fieldClauses = [];
-      for (const f of fields) {
-        if (f.key === "challenges" || f.key === "remarks") continue; // closing sentence
-        const line = _summariseFieldLine(f, data.reports, { itemsPerField: ITEMS_PER_FIELD });
-        if (line) fieldClauses.push(line.replace(/\.$/, ""));
-      }
-      if (fieldClauses.length === 0) continue;
-
-      const stat = ` (${data.people.size} ${data.people.size === 1 ? "person" : "people"}, ${data.reports.length} ${data.reports.length === 1 ? "report" : "reports"})`;
-      sentences.push(`${deptName}${stat} — ${fieldClauses.join(". ")}.`);
+    // Group reports by user.
+    const byUser = {};
+    for (const r of reports) {
+      const user = usersById[r.user_id];
+      if (!user) continue;
+      if (!byUser[user.id]) byUser[user.id] = { user, reports: [] };
+      byUser[user.id].reports.push(r);
     }
 
-    if (restDepts.length > 0) {
-      sentences.push(`${restDepts.length} other ${restDepts.length === 1 ? "department" : "departments"} (${_joinList(restDepts)}) also reported in.`);
+    // Sort employees by department name, then alphabetically by full name
+    // so Sales/Joel sits with Sales/Khushi etc.
+    const sortedEntries = Object.values(byUser).sort((a, b) => {
+      const da = a.user.department?.name || "~";
+      const db = b.user.department?.name || "~";
+      if (da !== db) return da.localeCompare(db);
+      return fullName(a.user).localeCompare(fullName(b.user));
+    });
+
+    // For each employee: a header line ("Name — Dept · N reports:") followed
+    // by one field line each (same formatter as the single-employee path).
+    // Blank line between people.
+    let lastDept = null;
+    for (const { user, reports: empReports } of sortedEntries) {
+      const dept = user.department;
+      const deptName = dept?.name || "—";
+      const fields = getReportFields(dept);
+
+      // Insert a blank line between departments for a bit of breathing room.
+      if (lastDept !== null && lastDept !== deptName) sentences.push("");
+      lastDept = deptName;
+
+      const empHeader =
+        `${fullName(user)} — ${deptName} · ` +
+        `${empReports.length} ${empReports.length === 1 ? "report" : "reports"}:`;
+      sentences.push(empHeader);
+
+      for (const f of fields) {
+        if (f.key === "challenges" || f.key === "remarks") continue; // closing sentence
+        const line = _summariseFieldLine(f, empReports);
+        if (line) sentences.push(`  ${line}`); // indent for readability
+      }
     }
   }
 
