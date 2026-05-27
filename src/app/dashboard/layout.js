@@ -93,9 +93,12 @@ export default function DashboardLayout({ children }) {
     return true;
   });
   const meName = fullName(me);
+  // Use the user's title when present — so an HR-role user with title "CEO"
+  // shows as "CEO" instead of the generic "HR Manager".  Falls back to
+  // "HR Manager" for HR users without a custom title.
   const subtitle =
     me.role === "hr"
-      ? "HR Manager"
+      ? (me.title || "HR Manager")
       : `${me.department?.name || ""} • ${me.title || ""}`;
 
   return (
