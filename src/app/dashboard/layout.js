@@ -35,7 +35,8 @@ export default function DashboardLayout({ children }) {
   }, [meError, router]);
 
   // Route guard — non-HR users get bounced from HR-only pages back to /dashboard.
-  // The only employee-accessible routes are /dashboard and /dashboard/my-report.
+  // The only employee-accessible routes are /dashboard and /dashboard/my-report
+  // (plus dept- and role-gated extras like Sales Sheets and Teams).
   useEffect(() => {
     if (!me) return;
     if (me.role === "hr") return;
@@ -43,6 +44,11 @@ export default function DashboardLayout({ children }) {
     // Inside Sales employees get one extra page for their calling sheets.
     if (me.department?.slug === "insideSales") {
       employeePaths.push("/dashboard/sales-uploads");
+    }
+    // Team heads can access the Teams pages.  /dashboard/teams/<empId>
+    // is a dynamic route, so we check the prefix rather than an exact match.
+    if (me.is_team_head && (pathname === "/dashboard/teams" || pathname.startsWith("/dashboard/teams/"))) {
+      return;
     }
     const isAllowed = employeePaths.includes(pathname);
     if (!isAllowed) router.replace("/dashboard");
@@ -69,6 +75,16 @@ export default function DashboardLayout({ children }) {
       roles: ["hr", "employee"],
       requiresDept: "insideSales",
     },
+    // Team head sidebar entry — only employees flagged with is_team_head see
+    // this.  HR uses the existing department / All Employees views instead,
+    // so we deliberately exclude them.
+    {
+      href: "/dashboard/teams",
+      label: "Teams",
+      icon: "users",
+      roles: ["employee"],
+      requiresTeamHead: true,
+    },
     { href: "/dashboard/employees", label: "All Employees", icon: "users", roles: ["hr"] },
     { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
     {
@@ -90,6 +106,8 @@ export default function DashboardLayout({ children }) {
     if (n.requiresDept && me.role !== "hr") {
       return me.department?.slug === n.requiresDept;
     }
+    // Team-head-gated items: hide unless me.is_team_head is true.
+    if (n.requiresTeamHead && !me.is_team_head) return false;
     return true;
   });
   const meName = fullName(me);
