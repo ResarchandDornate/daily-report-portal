@@ -309,6 +309,7 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     title: employee?.title || "",
     contact_number: employee?.contact_number || "",
     role: employee?.role || "employee",
+    is_team_head: Boolean(employee?.is_team_head),
     organisation: employee?.organisation || "",
     reporting_manager: employee?.reporting_manager || "",
     date_of_joining: employee?.date_of_joining || "",
@@ -453,6 +454,22 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
               {isEdit ? "Reset password (leave blank to keep)" : "Password (blank → firstname@ornate)"}
             </label>
             <input type="text" className={`mt-1 ${inputClass}`} value={form.password} onChange={(e) => up("password", e.target.value)} />
+          </div>
+          <div className="sm:col-span-2">
+            <label className="flex items-center gap-2 text-xs text-zinc-700">
+              <input
+                type="checkbox"
+                checked={Boolean(form.is_team_head)}
+                onChange={(e) => up("is_team_head", e.target.checked)}
+                className="h-4 w-4 rounded border-zinc-300 text-orange-600 focus:ring-orange-500"
+              />
+              <span>
+                <span className="font-medium">Team head</span>
+                <span className="ml-1 text-[10px] text-zinc-500">
+                  — can submit daily reports on behalf of any colleague in their department
+                </span>
+              </span>
+            </label>
           </div>
         </div>
 
