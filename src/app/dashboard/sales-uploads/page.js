@@ -13,8 +13,8 @@ import {
 export default function SalesUploadsPage() {
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
-  const isInsideSales = me?.department?.slug === "insideSales";
-  const canUpload = isHR || isInsideSales;
+  const canUpload =
+    isHR || ["insideSales", "salesService"].includes(me?.department?.slug);
 
   const { data: uploads = [], isLoading } = useSalesUploads();
   const upload = useUploadSalesSheet();
