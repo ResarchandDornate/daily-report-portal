@@ -299,10 +299,19 @@ export default function SummaryPage() {
  * someone went / what they wrote without a hopeless 0 sum.
  */
 function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, end }) {
-  // Classify each field once, based on the full report set in scope.
+  // Classify each field as numeric or text.  A field is numeric when EITHER
+  //   (a) its label looks like a count/amount column ("No. of …", "Revenue",
+  //       "Total …", "Calls", "Leads", "Amount", "₹", etc.), so even when
+  //       people type mixed content like "4, 2, On Medical Leave, 3" we
+  //       still extract and sum the numbers; or
+  //   (b) every non-empty value cleanly parses as a single number.
   const fieldKinds = useMemo(() => {
     const kinds = {};
     for (const f of fields) {
+      if (labelLooksNumeric(f.label || f.key || "")) {
+        kinds[f.key] = "numeric";
+        continue;
+      }
       let isNumeric = true;
       for (const r of reports) {
         const raw = r.data?.[f.key];
@@ -332,10 +341,14 @@ function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, 
         const cells = {};
         for (const f of fields) {
           if (fieldKinds[f.key] === "numeric") {
-            cells[f.key] = userReports.reduce(
-              (sum, r) => sum + parseNumber(r.data?.[f.key]),
-              0,
-            );
+            // Sum every number we can find inside the cell strings — handles
+            // both clean numeric cells AND mixed content like
+            // "4, 2, On Medical Leave, 3" or "Monthly Sales- 543.15".
+            let total = 0;
+            for (const r of userReports) {
+              extractNumbers(r.data?.[f.key]).forEach((n) => (total += n));
+            }
+            cells[f.key] = total;
           } else {
             const distinct = new Set();
             for (const r of userReports) {
@@ -492,11 +505,36 @@ function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, 
   );
 }
 
-function parseNumber(v) {
-  if (v == null) return 0;
-  const cleaned = String(v).replace(/[₹,\s]/g, "");
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n : 0;
+// Label hint — when the column name reads like a count or amount, we always
+// treat it as numeric so the totals row sums numbers buried inside free text.
+const NUMERIC_LABEL_RE =
+  /\b(no\.?|number|count|total|amount|revenue|calls?|meetings?|enquiries|leads?|companies|visits?|orders?|hours?|sum|rate|₹|rs\.?|inr|amt|pis?)\b/i;
+function labelLooksNumeric(label) {
+  return NUMERIC_LABEL_RE.test(String(label || ""));
+}
+
+// Pull every number out of a free-text cell.  Handles thousand-separator
+// commas ("1,287.32" → 1287.32), skips year-looking integers (1900-2100),
+// and skips ordinal dates ("25th") so "4, 2, 25th May 2026, 3" becomes
+// [4, 2, 3] instead of [4, 2, 25, 2026, 3].
+function extractNumbers(s) {
+  if (s == null) return [];
+  const text = String(s);
+  const out = [];
+  // Match either a 1,234,567.89-style number (thousand separators) OR a
+  // plain 1234.56 number, then optionally consume an ordinal suffix so we
+  // can detect and discard date-like matches ("25th", "1st").
+  const re =
+    /(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(st|nd|rd|th)\b)?/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m[2]) continue; // ordinal — skip (1st, 25th, …)
+    const n = Number(m[1].replace(/,/g, ""));
+    if (!Number.isFinite(n)) continue;
+    if (Number.isInteger(n) && n >= 1900 && n <= 2100) continue; // likely a year
+    out.push(n);
+  }
+  return out;
 }
 
 function formatCell(value, key) {
