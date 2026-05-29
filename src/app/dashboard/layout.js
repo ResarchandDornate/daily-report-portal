@@ -41,8 +41,9 @@ export default function DashboardLayout({ children }) {
     if (!me) return;
     if (me.role === "hr") return;
     const employeePaths = ["/dashboard", "/dashboard/my-report"];
-    // Inside Sales employees get one extra page for their calling sheets.
-    if (me.department?.slug === "insideSales") {
+    // Inside Sales and Sales Service employees get one extra page for their
+    // calling / customer-service sheets.
+    if (["insideSales", "salesService"].includes(me.department?.slug)) {
       employeePaths.push("/dashboard/sales-uploads");
     }
     // Team heads can access the Teams pages.  /dashboard/teams/<empId>
@@ -73,7 +74,7 @@ export default function DashboardLayout({ children }) {
       label: "Sales Sheets",
       icon: "upload",
       roles: ["hr", "employee"],
-      requiresDept: "insideSales",
+      requiresDept: ["insideSales", "salesService"],
     },
     // Team head sidebar entry — only employees flagged with is_team_head see
     // this.  HR uses the existing department / All Employees views instead,
@@ -104,7 +105,8 @@ export default function DashboardLayout({ children }) {
     if (!n.roles.includes(me.role)) return false;
     // HR always sees dept-gated items; non-HR only when their dept matches.
     if (n.requiresDept && me.role !== "hr") {
-      return me.department?.slug === n.requiresDept;
+      const allowed = Array.isArray(n.requiresDept) ? n.requiresDept : [n.requiresDept];
+      return allowed.includes(me.department?.slug);
     }
     // Team-head-gated items: hide unless me.is_team_head is true.
     if (n.requiresTeamHead && !me.is_team_head) return false;
