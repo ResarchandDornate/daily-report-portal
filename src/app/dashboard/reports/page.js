@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
-  downloadFile,
   formatPretty,
   formatPrettyWithDay,
   fullName,
   getReportFields,
   indexById,
   indexBySlug,
-  reportsToCSV,
   shiftDays,
   todayISO,
 } from "@/lib/data";
+import { api } from "@/lib/api";
 import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -221,10 +221,36 @@ export default function ReportsPage() {
 
   const visibleRows = sortedRows;
 
-  function exportCSV() {
-    const csv = reportsToCSV(reports, { usersById: employeesById });
-    const filename = `daily-reports_${start}_to_${end}_p${page}.csv`;
-    downloadFile(filename, csv, "text/csv");
+  const [exporting, setExporting] = useState(false);
+  async function exportExcel() {
+    // Hits the backend exporter so every page of reports in the current
+    // filter window lands in one workbook — with one sheet per department.
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (start) params.set("start", start);
+      if (end) params.set("end", end);
+      if (dept !== "all") params.set("department", dept);
+      if (employeeId !== "all") params.set("employee", String(employeeId));
+      const res = await api.get(`/api/reports/export.xlsx?${params.toString()}`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `daily-reports_${start}_to_${end}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(`Couldn't export Excel: ${e.message || "unknown error"}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   const firstRow = total === 0 ? 0 : (page - 1) * pageSize + 1;
@@ -246,12 +272,13 @@ export default function ReportsPage() {
             </div>
           </div>
           <button
-            onClick={exportCSV}
-            disabled={filtered.length === 0}
+            onClick={exportExcel}
+            disabled={total === 0 || exporting}
             className="inline-flex items-center gap-1.5 rounded-md bg-orange-600 px-2.5 py-1.5 text-xs font-semibold text-white shadow-soft hover:bg-orange-700 disabled:opacity-50"
+            title="Download an Excel file with one tab per department"
           >
             <DownloadIcon className="h-3.5 w-3.5" />
-            Export CSV ({filtered.length})
+            {exporting ? "Preparing…" : `Export Excel (${total})`}
           </button>
         </div>
       </header>
