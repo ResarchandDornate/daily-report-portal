@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import {
   buildSummaryText,
   downloadFile,
@@ -8,11 +9,11 @@ import {
   getMonthRange,
   getWeekRange,
   indexById,
-  reportsToCSV,
   shareViaEmail,
   shareViaWhatsApp,
   todayISO,
 } from "@/lib/data";
+import { api } from "@/lib/api";
 import { useDepartments, useEmployees, useReports } from "@/lib/queries";
 
 export default function SummaryPage() {
@@ -68,9 +69,35 @@ export default function SummaryPage() {
     };
   }, [reports]);
 
-  function downloadCSV() {
-    const csv = reportsToCSV(reports, { usersById: employeesById });
-    downloadFile(`summary_${start}_to_${end}.csv`, csv, "text/csv");
+  const [exporting, setExporting] = useState(false);
+  async function exportExcel() {
+    // Reuses the Reports page exporter — one sheet per department, full
+    // dataset in the current date range (not just what's in memory).
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (start) params.set("start", start);
+      if (end) params.set("end", end);
+      if (dept !== "all") params.set("department", dept);
+      const res = await api.get(`/api/reports/export.xlsx?${params.toString()}`, {
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `summary_${start}_to_${end}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast.error(`Couldn't export Excel: ${e.message || "unknown error"}`);
+    } finally {
+      setExporting(false);
+    }
   }
 
   function downloadText() {
@@ -180,7 +207,9 @@ export default function SummaryPage() {
           <div className="flex flex-wrap items-center gap-1.5">
             <ActionBtn onClick={copyText} icon="copy">Copy</ActionBtn>
             <ActionBtn onClick={downloadText} icon="download">Download .txt</ActionBtn>
-            <ActionBtn onClick={downloadCSV} icon="download" tone="dark">CSV</ActionBtn>
+            <ActionBtn onClick={exportExcel} icon="download" tone="dark" disabled={exporting}>
+              {exporting ? "Preparing…" : "Excel"}
+            </ActionBtn>
             <ActionBtn onClick={() => setShareOpen((v) => !v)} icon="share" tone="primary">
               Share with CEO
             </ActionBtn>
@@ -448,7 +477,7 @@ function Stat({ label, value }) {
   );
 }
 
-function ActionBtn({ children, onClick, icon, tone = "default" }) {
+function ActionBtn({ children, onClick, icon, tone = "default", disabled = false }) {
   const tones = {
     default: "border border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50",
     dark: "bg-zinc-900 text-white hover:bg-zinc-800",
@@ -456,7 +485,11 @@ function ActionBtn({ children, onClick, icon, tone = "default" }) {
   };
   const Icon = { copy: CopyIcon, download: DownloadIcon, share: ShareIcon }[icon];
   return (
-    <button onClick={onClick} className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium ${tones[tone]}`}>
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium ${tones[tone]} disabled:cursor-not-allowed disabled:opacity-60`}
+    >
       {Icon && <Icon className="h-3.5 w-3.5" />}
       {children}
     </button>
