@@ -35,11 +35,20 @@ export default function SummaryPage() {
   const { data: reports = [] } = useReports(reportFilters);
 
   const employeesById = useMemo(() => indexById(employees), [employees]);
-  const insideSalesDept = useMemo(
-    () => departments.find((d) => d.slug === "insideSales"),
+  // Departments that get a per-employee summed table at the bottom of the
+  // summary page.  Useful for teams whose daily reports are mostly numeric
+  // (counts, revenue, etc.) so HR can scan totals at a glance.
+  const SUMMARY_TABLE_SLUGS = ["insideSales", "sales"];
+  const summaryDepts = useMemo(
+    () =>
+      SUMMARY_TABLE_SLUGS.map((slug) => departments.find((d) => d.slug === slug))
+        .filter(Boolean),
     [departments],
   );
-  const showInsideSalesTable = dept === "insideSales" && !!insideSalesDept;
+  const visibleSummaryDepts = useMemo(
+    () => summaryDepts.filter((d) => dept === "all" || dept === d.slug),
+    [summaryDepts, dept],
+  );
 
   function applyPreset(kind) {
     setPreset(kind);
@@ -265,83 +274,150 @@ export default function SummaryPage() {
         </div>
       </div>
 
-      {showInsideSalesTable && (
-        <InsideSalesTable
+      {visibleSummaryDepts.map((d) => (
+        <DeptSummaryTable
+          key={d.slug}
+          title={d.name}
+          deptSlug={d.slug}
           reports={reports}
           employees={employees}
-          fields={insideSalesDept.report_fields}
+          fields={d.report_fields}
           start={start}
           end={end}
         />
-      )}
+      ))}
     </div>
   );
 }
 
-/* ---------- Inside Sales tabular summary ---------- */
-
-function InsideSalesTable({ reports, employees, fields, start, end }) {
-  const rows = useMemo(() => {
-    const insideSalesUsers = employees.filter(
-      (u) => u.department?.slug === "insideSales",
-    );
-    const sumsByUser = {};
-    for (const u of insideSalesUsers) {
-      sumsByUser[u.id] = Object.fromEntries(fields.map((f) => [f.key, 0]));
-    }
-    for (const r of reports) {
-      if (!sumsByUser[r.user_id]) continue;
-      for (const f of fields) {
+/* ---------- Per-department tabular summary ----------
+ *
+ * Same shape as the original Inside Sales table but works for any department.
+ * Each report field is classified as numeric (every non-empty value parses
+ * cleanly as a number) or text.  Numeric fields are summed per employee,
+ * text fields show distinct values comma-joined so HR still sees where
+ * someone went / what they wrote without a hopeless 0 sum.
+ */
+function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, end }) {
+  // Classify each field once, based on the full report set in scope.
+  const fieldKinds = useMemo(() => {
+    const kinds = {};
+    for (const f of fields) {
+      let isNumeric = true;
+      for (const r of reports) {
         const raw = r.data?.[f.key];
-        const n = parseNumber(raw);
-        sumsByUser[r.user_id][f.key] += n;
+        if (raw == null || String(raw).trim() === "") continue;
+        if (String(raw).trim().toLowerCase() === "on leave") continue;
+        const cleaned = String(raw).replace(/[₹,\s]/g, "");
+        if (cleaned === "" || !Number.isFinite(Number(cleaned))) {
+          isNumeric = false;
+          break;
+        }
       }
+      kinds[f.key] = isNumeric ? "numeric" : "text";
     }
-    return insideSalesUsers
-      .map((u) => ({
-        id: u.id,
-        name: (u.first_name || u.username || "").trim(),
-        sums: sumsByUser[u.id],
-      }))
+    return kinds;
+  }, [fields, reports]);
+
+  const rows = useMemo(() => {
+    const deptUsers = employees.filter((u) => u.department?.slug === deptSlug);
+    const byUser = {};
+    for (const u of deptUsers) byUser[u.id] = [];
+    for (const r of reports) {
+      if (byUser[r.user_id]) byUser[r.user_id].push(r);
+    }
+    return deptUsers
+      .map((u) => {
+        const userReports = byUser[u.id] || [];
+        const cells = {};
+        for (const f of fields) {
+          if (fieldKinds[f.key] === "numeric") {
+            cells[f.key] = userReports.reduce(
+              (sum, r) => sum + parseNumber(r.data?.[f.key]),
+              0,
+            );
+          } else {
+            const distinct = new Set();
+            for (const r of userReports) {
+              const v = r.data?.[f.key];
+              if (v != null && String(v).trim() && String(v).trim().toLowerCase() !== "on leave") {
+                distinct.add(String(v).trim());
+              }
+            }
+            cells[f.key] = [...distinct].join(", ");
+          }
+        }
+        return {
+          id: u.id,
+          name: (u.first_name || u.username || "").trim(),
+          cells,
+        };
+      })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [reports, employees, fields]);
+  }, [reports, employees, deptSlug, fields, fieldKinds]);
 
   const totals = useMemo(() => {
-    const t = Object.fromEntries(fields.map((f) => [f.key, 0]));
-    for (const r of rows) {
-      for (const f of fields) t[f.key] += r.sums[f.key];
+    const t = {};
+    for (const f of fields) {
+      if (fieldKinds[f.key] === "numeric") {
+        t[f.key] = rows.reduce((sum, r) => sum + (r.cells[f.key] || 0), 0);
+      } else {
+        const all = new Set();
+        for (const r of rows) {
+          if (r.cells[f.key]) {
+            r.cells[f.key]
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean)
+              .forEach((v) => all.add(v));
+          }
+        }
+        t[f.key] = all.size > 0 ? `${all.size} unique` : "—";
+      }
     }
     return t;
-  }, [rows, fields]);
+  }, [rows, fields, fieldKinds]);
 
   const rangeLabel =
     start === end ? formatPretty(start) : `${formatPretty(start)} → ${formatPretty(end)}`;
+
+  function cellDisplay(value, key) {
+    if (fieldKinds[key] === "numeric") return formatCell(value, key);
+    return value || "—";
+  }
 
   function copyTable() {
     if (typeof navigator === "undefined") return;
     const header = ["Name", ...fields.map((f) => f.label)].join("\t");
     const body = rows
-      .map((r) => [r.name, ...fields.map((f) => r.sums[f.key])].join("\t"))
+      .map((r) => [r.name, ...fields.map((f) => cellDisplay(r.cells[f.key], f.key))].join("\t"))
       .join("\n");
-    const totalLine = ["Total", ...fields.map((f) => totals[f.key])].join("\t");
+    const totalLine = ["Total", ...fields.map((f) => cellDisplay(totals[f.key], f.key))].join("\t");
     navigator.clipboard?.writeText([header, body, totalLine].join("\n"));
   }
 
   function downloadCSVTable() {
-    const header = ["Name", ...fields.map((f) => f.label)].join(",");
+    const escape = (v) => {
+      const s = String(v ?? "");
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["Name", ...fields.map((f) => f.label)].map(escape).join(",");
     const body = rows
-      .map((r) => [r.name, ...fields.map((f) => r.sums[f.key])].join(","))
+      .map((r) =>
+        [r.name, ...fields.map((f) => cellDisplay(r.cells[f.key], f.key))].map(escape).join(","),
+      )
       .join("\n");
-    const totalLine = ["Total", ...fields.map((f) => totals[f.key])].join(",");
+    const totalLine = ["Total", ...fields.map((f) => cellDisplay(totals[f.key], f.key))].map(escape).join(",");
     const csv = [header, body, totalLine].join("\n");
-    downloadFile(`inside_sales_${start}_to_${end}.csv`, csv, "text/csv");
+    const safeSlug = (deptSlug || "summary").replace(/[^a-z0-9]+/gi, "_").toLowerCase();
+    downloadFile(`${safeSlug}_${start}_to_${end}.csv`, csv, "text/csv");
   }
 
   return (
     <div className="rounded-lg border border-zinc-200 bg-white">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-100 px-4 py-3">
         <div>
-          <h3 className="text-sm font-semibold text-zinc-900">Inside Sales — summary table</h3>
+          <h3 className="text-sm font-semibold text-zinc-900">{title} — summary table</h3>
           <p className="text-[11px] text-zinc-500">{rangeLabel}</p>
         </div>
         <div className="flex items-center gap-1.5">
@@ -359,7 +435,9 @@ function InsideSalesTable({ reports, employees, fields, start, end }) {
               {fields.map((f) => (
                 <th
                   key={f.key}
-                  className="border-b border-r border-zinc-200 px-3 py-2 text-right font-semibold last:border-r-0"
+                  className={`border-b border-r border-zinc-200 px-3 py-2 font-semibold last:border-r-0 ${
+                    fieldKinds[f.key] === "numeric" ? "text-right" : "text-left"
+                  }`}
                 >
                   {f.label}
                 </th>
@@ -370,7 +448,7 @@ function InsideSalesTable({ reports, employees, fields, start, end }) {
             {rows.length === 0 ? (
               <tr>
                 <td colSpan={fields.length + 1} className="px-3 py-6 text-center text-zinc-500">
-                  No Inside Sales employees found.
+                  No {title} employees found.
                 </td>
               </tr>
             ) : (
@@ -382,9 +460,11 @@ function InsideSalesTable({ reports, employees, fields, start, end }) {
                   {fields.map((f) => (
                     <td
                       key={f.key}
-                      className="border-b border-r border-zinc-200 px-3 py-2 text-right text-zinc-800 last:border-r-0"
+                      className={`border-b border-r border-zinc-200 px-3 py-2 text-zinc-800 last:border-r-0 ${
+                        fieldKinds[f.key] === "numeric" ? "text-right" : "text-left"
+                      }`}
                     >
-                      {formatCell(r.sums[f.key], f.key)}
+                      {cellDisplay(r.cells[f.key], f.key)}
                     </td>
                   ))}
                 </tr>
@@ -396,9 +476,11 @@ function InsideSalesTable({ reports, employees, fields, start, end }) {
                 {fields.map((f) => (
                   <td
                     key={f.key}
-                    className="border-r border-zinc-200 px-3 py-2 text-right last:border-r-0"
+                    className={`border-r border-zinc-200 px-3 py-2 last:border-r-0 ${
+                      fieldKinds[f.key] === "numeric" ? "text-right" : "text-left"
+                    }`}
                   >
-                    {formatCell(totals[f.key], f.key)}
+                    {cellDisplay(totals[f.key], f.key)}
                   </td>
                 ))}
               </tr>
