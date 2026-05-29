@@ -19,6 +19,12 @@ import {
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
+// Departments that don't track daily reports — their employees are excluded
+// from the "Total Employees" headline count.  Same departments and people
+// still appear everywhere else (sidebar, department detail, All Employees,
+// etc.) — this is just so the top-card count reflects "reporting employees".
+const NON_REPORTING_DEPTS = new Set(["rd", "finance"]);
+
 // `useSearchParams()` inside OverviewContent bails the route out of static
 // prerendering — wrap it in <Suspense> so Next.js can prerender a shell and
 // stream the content in on the client.
@@ -129,6 +135,16 @@ function OverviewContent() {
   // HR sees ALL submissions for the selected date (newest first), so they
   // can scan the day's activity without artificially capping at 8 rows.
   // Employees see ALL of their own reports across dates.
+  // Counts that exclude R&D and Finance (those depts don't file daily reports).
+  const reportingEmployeesCount = useMemo(
+    () => employees.filter((e) => !NON_REPORTING_DEPTS.has(e.department?.slug)).length,
+    [employees],
+  );
+  const reportingDeptsCount = useMemo(
+    () => departments.filter((d) => !NON_REPORTING_DEPTS.has(d.slug)).length,
+    [departments],
+  );
+
   const recent = useMemo(
     () =>
       [...selectedDateReports].sort((a, b) => {
@@ -156,7 +172,7 @@ function OverviewContent() {
       {/* Stat cards — HR only */}
       {isHR && (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-          <StatCard label="Total Employees" value={employees.length} hint={`Across ${departments.length} departments`} icon="users" tone="orange" href="/dashboard/employees" />
+          <StatCard label="Total Employees" value={reportingEmployeesCount} hint={`Across ${reportingDeptsCount} reporting departments`} icon="users" tone="orange" href="/dashboard/employees" />
           <StatCard label={`Reports ${stampLabel}`} value={selectedDateReports.length} hint={formatPretty(selectedDate)} icon="check" tone="emerald" href="/dashboard/reports" />
           <StatCard label={`Missing ${stampLabel}`} value={missing.length} hint="Pending submissions" icon="alert" tone="rose" href="#pending-today" />
           <StatCard label={`On Leave ${stampLabel}`} value={onLeaveCount} hint="View leave log" icon="palm" tone="amber" href="/dashboard/leaves" />
