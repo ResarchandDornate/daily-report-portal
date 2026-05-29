@@ -44,12 +44,15 @@ export default function TeamMemberReportPage() {
 
   if (empLoading || !me) return null;
 
-  // Authorisation guard — only HR or a team-head whose department matches
-  // the target's department can submit reports on behalf of someone else.
+  // Authorisation guard — only HR or a team-head whose MANAGED department
+  // matches the target's department can submit reports on behalf of someone
+  // else.  Managed dept is `team_head_dept` (slug) when set, otherwise the
+  // team head's own department.  Mirrors the backend check.
   const isHR = me.role === "hr";
-  const sameDept =
-    me.department?.id != null && me.department?.id === employee?.department?.id;
-  const allowed = isHR || (me.is_team_head && sameDept);
+  const managedSlug = me.team_head_dept || me.department?.slug || null;
+  const inManagedDept =
+    managedSlug != null && employee?.department?.slug === managedSlug;
+  const allowed = isHR || (me.is_team_head && inManagedDept);
 
   if (!employee) {
     return (

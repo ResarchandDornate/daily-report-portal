@@ -310,6 +310,7 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     contact_number: employee?.contact_number || "",
     role: employee?.role || "employee",
     is_team_head: Boolean(employee?.is_team_head),
+    team_head_dept: employee?.team_head_dept || "",
     organisation: employee?.organisation || "",
     reporting_manager: employee?.reporting_manager || "",
     date_of_joining: employee?.date_of_joining || "",
@@ -466,11 +467,37 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
               <span>
                 <span className="font-medium">Team head</span>
                 <span className="ml-1 text-[10px] text-zinc-500">
-                  — can submit daily reports on behalf of any colleague in their department
+                  — can submit daily reports on behalf of any colleague in the managed department
                 </span>
               </span>
             </label>
           </div>
+          {form.is_team_head && (
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Manages department</label>
+              <select
+                className={`mt-1 ${inputClass}`}
+                value={form.team_head_dept}
+                onChange={(e) => up("team_head_dept", e.target.value)}
+              >
+                <option value="">
+                  Their own department ({departments.find((d) => d.slug === form.department)?.name || "—"})
+                </option>
+                {departments
+                  .filter((d) => d.slug !== form.department)
+                  .map((d) => (
+                    <option key={d.slug} value={d.slug}>
+                      {d.name}
+                    </option>
+                  ))}
+              </select>
+              <p className="mt-1 text-[10px] text-zinc-500">
+                Lets a Sales Head sit in &ldquo;Sales Head&rdquo; while filing
+                reports for the Sales team. Leave as default for normal team
+                heads who manage their own department.
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-3">

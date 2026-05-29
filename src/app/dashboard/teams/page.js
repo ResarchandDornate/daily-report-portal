@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { formatPretty, fullName, getWeekRange, todayISO } from "@/lib/data";
-import { useEmployees, useMe, useReports } from "@/lib/queries";
+import { useDepartments, useEmployees, useMe, useReports } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
 export default function TeamsPage() {
@@ -12,13 +12,24 @@ export default function TeamsPage() {
   const today = todayISO();
   const week = useMemo(() => getWeekRange(), []);
 
-  // The Teams view is scoped to the team head's OWN department.
-  const myDeptSlug = me?.department?.slug;
+  // The Teams view is scoped to the team head's MANAGED department.
+  // When `team_head_dept` is set, the team head manages a different
+  // department than their own (e.g. Justina sits in "Sales Head" but
+  // manages the Sales team).  Falls back to their own department.
+  const managedDeptSlug = me?.team_head_dept || me?.department?.slug;
+  const { data: departments = [] } = useDepartments();
+  const managedDept = useMemo(
+    () =>
+      managedDeptSlug
+        ? departments.find((d) => d.slug === managedDeptSlug)
+        : me?.department,
+    [departments, managedDeptSlug, me],
+  );
   const { data: employees = [] } = useEmployees(
-    myDeptSlug ? { department: myDeptSlug } : {},
+    managedDeptSlug ? { department: managedDeptSlug } : {},
   );
   const { data: reports = [] } = useReports(
-    myDeptSlug ? { department: myDeptSlug, start: week.start, end: week.end } : {},
+    managedDeptSlug ? { department: managedDeptSlug, start: week.start, end: week.end } : {},
   );
 
   const rows = useMemo(() => {
@@ -75,7 +86,7 @@ export default function TeamsPage() {
             </span>
             <div className="leading-tight">
               <h1 className="text-base font-semibold tracking-tight text-zinc-900">
-                {me.department?.name || "Your team"}
+                {managedDept?.name || me.department?.name || "Your team"}
               </h1>
               <p className="text-[11px] text-zinc-600">
                 {rows.length} {rows.length === 1 ? "colleague" : "colleagues"} ·{" "}
