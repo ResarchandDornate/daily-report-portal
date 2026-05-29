@@ -265,6 +265,13 @@ export default function SummaryPage() {
         </div>
       </div>
 
+      <SummaryTables
+        reports={reports}
+        employees={employees}
+        departments={departments}
+        dept={dept}
+      />
+
       {showInsideSalesTable && (
         <InsideSalesTable
           reports={reports}
@@ -276,6 +283,194 @@ export default function SummaryPage() {
       )}
     </div>
   );
+}
+
+/* ---------- Per-department summary tables ----------
+ *
+ * Mirrors the Excel export: for each department represented in the current
+ * report set, render a small table with one row per employee.  Numeric fields
+ * (Total Calls, Picked, Revenue, …) get summed across the date range.  Text
+ * fields get a date-prefixed concatenation so HR can still see what was said
+ * on which day.  Reports flagged as leave (`__leave__ == "1"`) are skipped
+ * in the rollup since they don't add information to the summary.
+ */
+function SummaryTables({ reports, employees, departments, dept }) {
+  const sections = useMemo(() => {
+    const empById = indexById(employees);
+    const deptBySlug = {};
+    for (const d of departments) deptBySlug[d.slug] = d;
+
+    // Group reports by department slug.
+    const byDept = {};
+    for (const r of reports) {
+      if (r.data?.__leave__ === "1") continue;
+      const emp = empById[r.user_id];
+      const slug = emp?.department?.slug || "_none";
+      if (!byDept[slug]) byDept[slug] = [];
+      byDept[slug].push(r);
+    }
+
+    return Object.entries(byDept)
+      .map(([slug, deptReports]) => {
+        const d = deptBySlug[slug];
+        const fields = d?.report_fields || [];
+        // Group this dept's reports by employee.
+        const byUser = {};
+        for (const r of deptReports) {
+          if (!byUser[r.user_id]) byUser[r.user_id] = [];
+          byUser[r.user_id].push(r);
+        }
+        const rows = Object.entries(byUser).map(([uid, list]) => {
+          const u = empById[uid];
+          const sorted = [...list].sort((a, b) => a.date.localeCompare(b.date));
+          const dates = sorted.map((r) => r.date);
+          const range =
+            dates.length === 0
+              ? "—"
+              : dates[0] === dates[dates.length - 1]
+              ? formatPretty(dates[0])
+              : `${formatPretty(dates[0])} → ${formatPretty(dates[dates.length - 1])}`;
+          const cells = fields.map((f) =>
+            summariseField(sorted.map((r) => [r.date, r.data?.[f.key]])),
+          );
+          return {
+            uid,
+            name: u ? `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username : `User #${uid}`,
+            range,
+            cells,
+            count: sorted.length,
+          };
+        }).sort((a, b) => a.name.localeCompare(b.name));
+        return {
+          slug,
+          name: d?.name || "No Department",
+          color: d?.color || "zinc",
+          fields,
+          rows,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [reports, employees, departments]);
+
+  if (!sections.length) return null;
+
+  // When the user has picked a specific department in the filter, hide other
+  // sections to mirror the rest of the page's scoping.
+  const visible = dept === "all" ? sections : sections.filter((s) => s.slug === dept);
+  if (!visible.length) return null;
+
+  return (
+    <div className="space-y-3">
+      {visible.map((s) => (
+        <div key={s.slug} className="rounded-lg border border-zinc-200 bg-white">
+          <div className="flex items-center justify-between gap-3 border-b border-zinc-100 px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className={`h-2 w-2 rounded-full ${dotBg(s.color)}`} />
+              <h3 className="text-sm font-semibold text-zinc-900">{s.name}</h3>
+              <span className="text-[11px] text-zinc-500">
+                · {s.rows.length} {s.rows.length === 1 ? "employee" : "employees"}
+              </span>
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-[12px]">
+              <thead>
+                <tr className="bg-zinc-50 text-left text-zinc-700">
+                  <th className="whitespace-nowrap border-b border-r border-zinc-200 px-3 py-2 font-semibold">
+                    Date range
+                  </th>
+                  <th className="whitespace-nowrap border-b border-r border-zinc-200 px-3 py-2 font-semibold">
+                    Employee
+                  </th>
+                  {s.fields.map((f) => (
+                    <th
+                      key={f.key}
+                      className="min-w-50 border-b border-r border-zinc-200 px-3 py-2 font-semibold last:border-r-0"
+                    >
+                      {f.label}
+                    </th>
+                  ))}
+                  <th className="whitespace-nowrap border-b border-zinc-200 px-3 py-2 text-center font-semibold">
+                    Reports
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {s.rows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={s.fields.length + 3}
+                      className="px-3 py-4 text-center text-zinc-500"
+                    >
+                      No submissions in this range.
+                    </td>
+                  </tr>
+                ) : (
+                  s.rows.map((r) => (
+                    <tr key={r.uid} className="align-top hover:bg-zinc-50">
+                      <td className="whitespace-nowrap border-b border-r border-zinc-100 px-3 py-2 text-zinc-700">
+                        {r.range}
+                      </td>
+                      <td className="whitespace-nowrap border-b border-r border-zinc-100 px-3 py-2 font-medium text-zinc-900">
+                        {r.name}
+                      </td>
+                      {r.cells.map((c, i) => (
+                        <td
+                          key={i}
+                          className="whitespace-pre-wrap border-b border-r border-zinc-100 px-3 py-2 text-zinc-800 last:border-r-0"
+                        >
+                          {c === "" ? "—" : c}
+                        </td>
+                      ))}
+                      <td className="border-b border-zinc-100 px-3 py-2 text-center font-medium text-zinc-700">
+                        {r.count}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function summariseField(pairs) {
+  // Mirrors the backend exporter: sum if every non-empty value is numeric,
+  // otherwise show one "date: value" line per day.
+  const filled = pairs
+    .map(([d, v]) => [d, (v ?? "").toString().trim()])
+    .filter(([, v]) => v && v.toLowerCase() !== "on leave");
+  if (filled.length === 0) return "";
+
+  const nums = [];
+  let allNumeric = true;
+  for (const [, v] of filled) {
+    const cleaned = v.replace(/[₹$,\s]/g, "");
+    const n = Number(cleaned);
+    if (!Number.isFinite(n) || cleaned === "") {
+      allNumeric = false;
+      break;
+    }
+    nums.push(n);
+  }
+  if (allNumeric) {
+    const total = nums.reduce((a, b) => a + b, 0);
+    return Number.isInteger(total) ? String(total) : total.toFixed(2);
+  }
+  return filled.map(([d, v]) => `${formatPretty(d)}: ${v}`).join("\n");
+}
+
+function dotBg(color) {
+  return {
+    indigo: "bg-indigo-500",
+    amber: "bg-amber-500",
+    emerald: "bg-emerald-500",
+    rose: "bg-rose-500",
+    sky: "bg-sky-500",
+  }[color] || "bg-zinc-400";
 }
 
 /* ---------- Inside Sales tabular summary ---------- */
