@@ -37,6 +37,76 @@ export default function DepartmentPage() {
   const week = useMemo(() => getWeekRange(), []);
   const weekTotal = 5; // full Mon-Fri week — numerator is "day index reached"
 
+  // Sales-only extra column.  Look up the report field whose label is the
+  // "meetings" counter so we can sum it per employee.
+  const isSales = slug === "sales";
+  const meetingsField = useMemo(() => {
+    if (!isSales || !dept?.report_fields) return null;
+    return (
+      dept.report_fields.find((f) =>
+        /\bmeeting/i.test(f.label || f.key || ""),
+      ) || null
+    );
+  }, [isSales, dept]);
+  // Extract every number from a free-text cell (handles "4, 2", "3 meetings",
+  // "Monthly Sales- 12,300", etc.), skipping years (1900-2100) and ordinals.
+  function extractMeetingCount(s) {
+    if (s == null) return 0;
+    const text = String(s).replace(/\d{4}-\d{2}-\d{2}\s*[:\-]?\s*/g, " ");
+    let total = 0;
+    const re = /(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(st|nd|rd|th)\b)?/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m[2]) continue;
+      const n = Number(m[1].replace(/,/g, ""));
+      if (!Number.isFinite(n)) continue;
+      if (Number.isInteger(n) && n >= 1900 && n <= 2100) continue;
+      total += n;
+    }
+    return total;
+  }
+
+  // Two windows in the current calendar month:
+  //   monthRange  → 1st of month → today  (used for "elapsed", missing count)
+  //   monthFull   → 1st of month → last day of month  (used as the numerator)
+  // Mon-Fri only; Sat/Sun excluded everywhere.
+  const monthRange = useMemo(() => {
+    const t = new Date();
+    const start = new Date(t.getFullYear(), t.getMonth(), 1);
+    const fmt = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { start: fmt(start), end: fmt(t) };
+  }, []);
+  const monthFull = useMemo(() => {
+    const t = new Date();
+    const start = new Date(t.getFullYear(), t.getMonth(), 1);
+    const end = new Date(t.getFullYear(), t.getMonth() + 1, 0); // last day
+    const fmt = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return { start: fmt(start), end: fmt(end) };
+  }, []);
+  function countWeekdays(startISO, endISO) {
+    let count = 0;
+    const d = new Date(startISO + "T00:00:00");
+    const end = new Date(endISO + "T00:00:00");
+    while (d <= end) {
+      const dow = d.getDay();
+      if (dow !== 0 && dow !== 6) count++;
+      d.setDate(d.getDate() + 1);
+    }
+    return count;
+  }
+  // Total Mon-Fri across the whole current month — shown as numerator.
+  const monthWorkdays = useMemo(
+    () => countWeekdays(monthFull.start, monthFull.end),
+    [monthFull],
+  );
+  // Mon-Fri elapsed so far (start of month → today) — used to compute missing.
+  const elapsedWorkdays = useMemo(
+    () => countWeekdays(monthRange.start, monthRange.end),
+    [monthRange],
+  );
+
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return employees
@@ -56,23 +126,38 @@ export default function DepartmentPage() {
           if (dow > maxDow) maxDow = dow; // Mon=1 ... Fri=5
         }
         const weekCount = Math.min(maxDow, weekTotal);
+        // Working-days/missing for the current calendar month.
+        // Missing is "elapsed Mon-Fri so far − reports submitted in month".
+        const monthSubmitted = empReports.filter(
+          (r) => r.date >= monthRange.start && r.date <= monthRange.end,
+        ).length;
+        const monthMissing = Math.max(0, elapsedWorkdays - monthSubmitted);
+        // Sum meeting numbers across this employee's reports (Sales only).
+        let meetingsCount = 0;
+        if (meetingsField) {
+          for (const r of empReports) {
+            meetingsCount += extractMeetingCount(r.data?.[meetingsField.key]);
+          }
+        }
         return {
           emp,
           totalReports: empReports.length,
           lastDate: last?.date || null,
           submittedToday,
           weekCount,
+          monthSubmitted,
+          monthMissing,
+          meetingsCount,
         };
       })
       .filter(({ emp }) => {
         if (!q) return true;
         return (
           fullName(emp).toLowerCase().includes(q) ||
-          (emp.title || "").toLowerCase().includes(q) ||
           (emp.email || "").toLowerCase().includes(q)
         );
       });
-  }, [employees, reports, today, query, week, weekTotal]);
+  }, [employees, reports, today, query, week, weekTotal, monthRange, elapsedWorkdays, meetingsField]);
 
   if (deptsLoading) {
     return (
@@ -145,7 +230,14 @@ export default function DepartmentPage() {
           <Table.Row>
             <Table.Th className="w-12 text-center">#</Table.Th>
             <Table.Th>Employee</Table.Th>
-            <Table.Th>Title</Table.Th>
+            <Table.Th className="whitespace-nowrap text-center" title="Working days this month / days missing">
+              Working Days
+            </Table.Th>
+            {meetingsField && (
+              <Table.Th className="whitespace-nowrap text-center" title={`Sum of "${meetingsField.label}" across all reports`}>
+                Meetings
+              </Table.Th>
+            )}
             <Table.Th>Email</Table.Th>
             <Table.Th>Today</Table.Th>
             <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
@@ -161,7 +253,7 @@ export default function DepartmentPage() {
               message={query ? "No employees match your search." : "No employees in this department."}
             />
           ) : (
-            rows.map(({ emp, totalReports, lastDate, submittedToday, weekCount }, i) => (
+            rows.map(({ emp, totalReports, lastDate, submittedToday, weekCount, monthSubmitted, monthMissing, meetingsCount }, i) => (
               <Table.Row key={emp.id}>
                 <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                 <Table.Td className="align-top">
@@ -173,7 +265,18 @@ export default function DepartmentPage() {
                     <span className="text-xs font-medium hover:text-orange-700">{fullName(emp)}</span>
                   </Link>
                 </Table.Td>
-                <Table.Td className="align-top text-zinc-700">{emp.title || "—"}</Table.Td>
+                <Table.Td className="align-top text-center" title={`${monthSubmitted} submitted of ${monthWorkdays} working days this month`}>
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-200">
+                    <span className="text-zinc-900">{monthWorkdays}</span>
+                    <span className="text-zinc-400">/</span>
+                    <span className={monthMissing > 0 ? "text-rose-600" : "text-emerald-600"}>{monthMissing}</span>
+                  </span>
+                </Table.Td>
+                {meetingsField && (
+                  <Table.Td className="align-top text-center font-medium tabular-nums text-zinc-800">
+                    {Number.isInteger(meetingsCount) ? meetingsCount : meetingsCount.toFixed(1)}
+                  </Table.Td>
+                )}
                 <Table.Td className="align-top text-zinc-600">{emp.email}</Table.Td>
                 <Table.Td className="align-top">
                   {submittedToday ? (
