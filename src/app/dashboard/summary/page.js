@@ -304,18 +304,34 @@ export default function SummaryPage() {
         </div>
       )}
 
-      {visibleSummaryDepts.map((d) => (
-        <DeptSummaryTable
-          key={d.slug}
-          title={d.name}
-          deptSlug={d.slug}
-          reports={reports}
-          employees={employees}
-          fields={d.report_fields}
-          start={start}
-          end={end}
-        />
-      ))}
+      {visibleSummaryDepts.map((d) => {
+        // Drop columns HR doesn't want on the Inside Sales summary table —
+        // matches the same exclusion applied in the Excel export.
+        const HIDDEN_FIELDS_BY_DEPT = {
+          insideSales: new Set([
+            "dataCalledType",
+            "mailSent",
+            "whatsappSent",
+            "otherWorks",
+          ]),
+        };
+        const hidden = HIDDEN_FIELDS_BY_DEPT[d.slug];
+        const visibleFields = hidden
+          ? (d.report_fields || []).filter((f) => !hidden.has(f.key))
+          : d.report_fields;
+        return (
+          <DeptSummaryTable
+            key={d.slug}
+            title={d.name}
+            deptSlug={d.slug}
+            reports={reports}
+            employees={employees}
+            fields={visibleFields}
+            start={start}
+            end={end}
+          />
+        );
+      })}
     </div>
   );
 }
