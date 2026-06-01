@@ -223,8 +223,7 @@ export default function ReportsPage() {
 
   const [exporting, setExporting] = useState(false);
   async function exportExcel() {
-    // Hits the backend exporter so every page of reports in the current
-    // filter window lands in one workbook — with one sheet per department.
+    // Multi-sheet XLSX: Sales — Detail + Inside Sales — Detail + Detailed Summary.
     setExporting(true);
     try {
       const params = new URLSearchParams();
