@@ -91,8 +91,8 @@ export default function SummaryPage() {
 
   const [exporting, setExporting] = useState(false);
   async function exportExcel() {
-    // Reuses the Reports page exporter — one sheet per department, full
-    // dataset in the current date range (not just what's in memory).
+    // Multi-sheet XLSX: Sales — Detail, Inside Sales — Detail (with per-field
+    // columns), plus a combined Detailed Summary for all other departments.
     setExporting(true);
     try {
       const params = new URLSearchParams();
