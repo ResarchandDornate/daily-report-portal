@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   buildSummaryText,
@@ -45,10 +45,21 @@ export default function SummaryPage() {
         .filter(Boolean),
     [departments],
   );
-  const visibleSummaryDepts = useMemo(
-    () => summaryDepts.filter((d) => dept === "all" || dept === d.slug),
-    [summaryDepts, dept],
-  );
+  // The per-department summary tables can be heavy to render (one row per
+  // employee × per field, with text concatenation), so we only show them on
+  // explicit intent — either the user filters to a specific department, or
+  // they click the "Generate summary tables" button below.  Filter changes
+  // (date / dept) reset the flag so a stale generation doesn't linger.
+  const [showAllSummaryTables, setShowAllSummaryTables] = useState(false);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShowAllSummaryTables(false);
+  }, [dept, start, end]);
+
+  const visibleSummaryDepts = useMemo(() => {
+    if (dept !== "all") return summaryDepts.filter((d) => d.slug === dept);
+    return showAllSummaryTables ? summaryDepts : [];
+  }, [summaryDepts, dept, showAllSummaryTables]);
 
   function applyPreset(kind) {
     setPreset(kind);
@@ -273,6 +284,25 @@ export default function SummaryPage() {
           {renderSummaryLines(summaryText)}
         </div>
       </div>
+
+      {dept === "all" && !showAllSummaryTables && summaryDepts.length > 0 && (
+        <div className="rounded-lg border border-dashed border-zinc-300 bg-white px-4 py-5 text-center">
+          <p className="text-[12px] text-zinc-600">
+            Per-department summary tables are hidden. Pick a department from the
+            filter above, or generate tables for{" "}
+            <span className="font-medium text-zinc-900">
+              {summaryDepts.map((d) => d.name).join(" and ")}
+            </span>{" "}
+            below.
+          </p>
+          <button
+            onClick={() => setShowAllSummaryTables(true)}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700"
+          >
+            Generate summary tables
+          </button>
+        </div>
+      )}
 
       {visibleSummaryDepts.map((d) => (
         <DeptSummaryTable
