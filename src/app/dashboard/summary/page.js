@@ -415,7 +415,9 @@ function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, 
               .forEach((v) => all.add(v));
           }
         }
-        t[f.key] = all.size > 0 ? `${all.size} unique` : "—";
+        // Show just the count number for text columns — matches numeric columns
+      // visually so the Total row is uniform.
+      t[f.key] = all.size > 0 ? all.size : "—";
       }
     }
     return t;
@@ -538,18 +540,20 @@ function DeptSummaryTable({ title, deptSlug, reports, employees, fields, start, 
 // Label hint — when the column name reads like a count or amount, we always
 // treat it as numeric so the totals row sums numbers buried inside free text.
 const NUMERIC_LABEL_RE =
-  /\b(no\.?|number|count|total|amount|revenue|calls?|meetings?|enquiries|leads?|companies|visits?|orders?|hours?|sum|rate|₹|rs\.?|inr|amt|pis?)\b/i;
+  /\b(no\.?|number|count|total|amount|revenue|calls?|meetings?|enquiries|leads?|companies|visits?|orders?|hours?|sum|rate|₹|rs\.?|inr|amt|pis?|picked|closed|lost|following|invoice|sent|shared|received|made|type|works?)\b/i;
 function labelLooksNumeric(label) {
   return NUMERIC_LABEL_RE.test(String(label || ""));
 }
 
 // Pull every number out of a free-text cell.  Handles thousand-separator
 // commas ("1,287.32" → 1287.32), skips year-looking integers (1900-2100),
-// and skips ordinal dates ("25th") so "4, 2, 25th May 2026, 3" becomes
-// [4, 2, 3] instead of [4, 2, 25, 2026, 3].
+// skips ordinal dates ("25th"), and strips ISO date prefixes like
+// "2026-05-04:" so "2026-05-04: 5 calls" becomes [5] (not [5, 4, 5]).
 function extractNumbers(s) {
   if (s == null) return [];
-  const text = String(s);
+  // Drop ISO date prefixes ("2026-05-04:", "2026-05-04 - ", "2026-05-04 -")
+  // so the day/month digits don't pollute the sum.
+  const text = String(s).replace(/\d{4}-\d{2}-\d{2}\s*[:\-]?\s*/g, " ");
   const out = [];
   // Match either a 1,234,567.89-style number (thousand separators) OR a
   // plain 1234.56 number, then optionally consume an ordinal suffix so we
