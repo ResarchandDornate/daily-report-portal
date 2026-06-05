@@ -80,20 +80,49 @@ function OverviewContent() {
     [reports, selectedDate]
   );
 
+  // Only employees from reporting departments — same scope as the
+  // "Total Employees" headline card.  All three stat cards (Reports /
+  // Missing / On Leave) are derived from this set so the math always
+  // adds up to the Total Employees count.
+  const reportingEmployees = useMemo(
+    () =>
+      employees.filter(
+        (e) =>
+          e.role !== "hr" &&
+          e.is_active !== false &&
+          !NON_REPORTING_DEPTS.has(e.department?.slug),
+      ),
+    [employees],
+  );
+  const reportingEmployeeIds = useMemo(
+    () => new Set(reportingEmployees.map((e) => e.id)),
+    [reportingEmployees],
+  );
+
+  // Reports filed today, restricted to reporting-dept employees only.
+  const selectedDateReportingReports = useMemo(
+    () =>
+      selectedDateReports.filter((r) => reportingEmployeeIds.has(r.user_id)),
+    [selectedDateReports, reportingEmployeeIds],
+  );
+
   const onLeaveCount = useMemo(
-    () => selectedDateReports.filter((r) => r.data?.__leave__ === "1").length,
-    [selectedDateReports]
+    () =>
+      selectedDateReportingReports.filter((r) => r.data?.__leave__ === "1")
+        .length,
+    [selectedDateReportingReports]
   );
 
   // Compute the missing list client-side from the selected date — this lets
-  // HR scrub back through prior dates and still see who didn't submit.  Mirrors
-  // the backend rule: non-HR, active employees who have no row on that date.
+  // HR scrub back through prior dates and still see who didn't submit.
+  // Filters to reporting-dept employees only so Reports + Missing always
+  // equals Total Employees on the headline cards.
   const missing = useMemo(() => {
-    const submittedIds = new Set(selectedDateReports.map((r) => r.user_id));
-    return employees.filter(
-      (e) => e.role !== "hr" && e.is_active !== false && !submittedIds.has(e.id),
+    const submittedIds = new Set(
+      selectedDateReportingReports.map((r) => r.user_id),
     );
-  }, [employees, selectedDateReports]);
+    return reportingEmployees.filter((e) => !submittedIds.has(e.id));
+  }, [reportingEmployees, selectedDateReportingReports]);
 
   const deptStats = useMemo(
     () =>
@@ -173,7 +202,7 @@ function OverviewContent() {
       {isHR && (
         <section className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           <StatCard label="Total Employees" value={reportingEmployeesCount} hint={`Across ${reportingDeptsCount} reporting departments`} icon="users" tone="orange" href="/dashboard/employees" />
-          <StatCard label={`Reports ${stampLabel}`} value={selectedDateReports.length} hint={formatPretty(selectedDate)} icon="check" tone="emerald" href="/dashboard/reports" />
+          <StatCard label={`Reports ${stampLabel}`} value={selectedDateReportingReports.length} hint={formatPretty(selectedDate)} icon="check" tone="emerald" href="/dashboard/reports" />
           <StatCard label={`Missing ${stampLabel}`} value={missing.length} hint="Pending submissions" icon="alert" tone="rose" href="#pending-today" />
           <StatCard label={`On Leave ${stampLabel}`} value={onLeaveCount} hint="View leave log" icon="palm" tone="amber" href="/dashboard/leaves" />
           <StatCard label="Departments" value={departments.length} hint="Active teams" icon="grid" tone="zinc" href="#department-breakdown" />
