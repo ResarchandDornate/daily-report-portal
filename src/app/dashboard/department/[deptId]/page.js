@@ -30,6 +30,10 @@ export default function DepartmentPage() {
 
   const [query, setQuery] = useState("");
   const [editingDept, setEditingDept] = useState(false);
+  // Which employee row is expanded inline.  null = none.  Click the row to
+  // toggle; clicking the Name link or View button still navigates to the
+  // full employee page instead of expanding (those stop propagation).
+  const [expandedId, setExpandedId] = useState(null);
   const updateDept = useUpdateDepartment();
   const deleteDept = useDeleteDepartment();
   const today = todayISO();
@@ -321,59 +325,81 @@ export default function DepartmentPage() {
               message={query ? "No employees match your search." : "No employees in this department."}
             />
           ) : (
-            rows.map(({ emp, totalReports, lastDate, submittedToday, weekCount, monthSubmitted, monthMissing, meetingsCount }, i) => (
-              <Table.Row key={emp.id}>
-                <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
-                <Table.Td className="align-top">
-                  <Link
-                    href={`/dashboard/employee/${emp.id}`}
-                    className="flex items-center gap-2 text-zinc-900"
-                  >
-                    <Avatar name={fullName(emp)} />
-                    <span className="text-xs font-medium hover:text-orange-700">{fullName(emp)}</span>
-                  </Link>
-                </Table.Td>
-                <Table.Td className="align-top text-center" title={`${monthSubmitted} submitted of ${monthWorkdays} working days this month`}>
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-200">
-                    <span className="text-zinc-900">{monthWorkdays}</span>
-                    <span className="text-zinc-400">/</span>
-                    <span className={monthMissing > 0 ? "text-rose-600" : "text-emerald-600"}>{monthMissing}</span>
-                  </span>
-                </Table.Td>
-                {meetingsField && (
-                  <Table.Td className="align-top text-center font-medium tabular-nums text-zinc-800">
-                    {Number.isInteger(meetingsCount) ? meetingsCount : meetingsCount.toFixed(1)}
+            rows.flatMap(({ emp, totalReports, lastDate, submittedToday, weekCount, monthSubmitted, monthMissing, meetingsCount }, i) => {
+              const isExpanded = expandedId === emp.id;
+              const colCount = meetingsField ? 10 : 9;
+              const empReports = reports
+                .filter((r) => r.user_id === emp.id)
+                .sort((a, b) => b.date.localeCompare(a.date));
+              const summaryRow = (
+                <Table.Row
+                  key={emp.id}
+                  onClick={() => setExpandedId((prev) => (prev === emp.id ? null : emp.id))}
+                  className={`cursor-pointer transition-colors ${isExpanded ? "bg-orange-50/40" : "hover:bg-zinc-50"}`}
+                >
+                  <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
+                  <Table.Td className="align-top">
+                    <span className="flex items-center gap-2 text-zinc-900">
+                      <Avatar name={fullName(emp)} />
+                      <span className="text-xs font-medium">{fullName(emp)}</span>
+                    </span>
                   </Table.Td>
-                )}
-                <Table.Td className="align-top text-zinc-600">{emp.email}</Table.Td>
-                <Table.Td className="align-top">
-                  {submittedToday ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                      <CheckIcon className="h-2.5 w-2.5" /> Submitted
+                  <Table.Td className="align-top text-center" title={`${monthSubmitted} submitted of ${monthWorkdays} working days this month`}>
+                    <span className="inline-flex items-center gap-0.5 rounded-full bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-200">
+                      <span className="text-zinc-900">{monthWorkdays}</span>
+                      <span className="text-zinc-400">/</span>
+                      <span className={monthMissing > 0 ? "text-rose-600" : "text-emerald-600"}>{monthMissing}</span>
                     </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
-                      Pending
-                    </span>
+                  </Table.Td>
+                  {meetingsField && (
+                    <Table.Td className="align-top text-center font-medium tabular-nums text-zinc-800">
+                      {Number.isInteger(meetingsCount) ? meetingsCount : meetingsCount.toFixed(1)}
+                    </Table.Td>
                   )}
-                </Table.Td>
-                <Table.Td className="align-top text-center">
-                  <WeekBadge count={weekCount} total={weekTotal} />
-                </Table.Td>
-                <Table.Td className="align-top font-medium text-zinc-800">{totalReports}</Table.Td>
-                <Table.Td className="align-top text-zinc-700">
-                  {lastDate ? formatPretty(lastDate) : "—"}
-                </Table.Td>
-                <Table.Td className="align-top text-right">
-                  <Link
-                    href={`/dashboard/employee/${emp.id}`}
-                    className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600 hover:text-orange-700"
-                  >
-                    View →
-                  </Link>
-                </Table.Td>
-              </Table.Row>
-            ))
+                  <Table.Td className="align-top text-zinc-600">{emp.email}</Table.Td>
+                  <Table.Td className="align-top">
+                    {submittedToday ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                        <CheckIcon className="h-2.5 w-2.5" /> Submitted
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700">
+                        Pending
+                      </span>
+                    )}
+                  </Table.Td>
+                  <Table.Td className="align-top text-center">
+                    <WeekBadge count={weekCount} total={weekTotal} />
+                  </Table.Td>
+                  <Table.Td className="align-top font-medium text-zinc-800">{totalReports}</Table.Td>
+                  <Table.Td className="align-top text-zinc-700">
+                    {lastDate ? formatPretty(lastDate) : "—"}
+                  </Table.Td>
+                  <Table.Td className="align-top text-right">
+                    <Link
+                      href={`/dashboard/employee/${emp.id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600 hover:text-orange-700"
+                    >
+                      View →
+                    </Link>
+                  </Table.Td>
+                </Table.Row>
+              );
+              if (!isExpanded) return [summaryRow];
+              return [
+                summaryRow,
+                <Table.Row key={`${emp.id}-expanded`}>
+                  <Table.Td colSpan={colCount} className="bg-orange-50/30 p-0">
+                    <ExpandedEmployeeReports
+                      emp={emp}
+                      reports={empReports}
+                      reportFields={dept.report_fields || []}
+                    />
+                  </Table.Td>
+                </Table.Row>,
+              ];
+            })
           )}
         </Table.Body>
       </Table>
@@ -591,6 +617,70 @@ function CheckIcon({ className = "" }) {
     </svg>
   );
 }
+
+function ExpandedEmployeeReports({ emp, reports, reportFields }) {
+  if (!reports.length) {
+    return (
+      <div className="border-t border-orange-100 px-4 py-3 text-[12px] text-zinc-500">
+        No daily reports submitted by {fullName(emp)} yet.
+      </div>
+    );
+  }
+  // Show every field column the department has plus a leading Date column.
+  // Long text values wrap; empty values render as a muted em-dash.
+  const cols = reportFields.length ? reportFields : [{ key: "summary", label: "Summary" }];
+  return (
+    <div className="border-t border-orange-100 px-3 py-3">
+      <div className="mb-1.5 flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+          {fullName(emp)}&apos;s daily reports
+          <span className="ml-1.5 text-zinc-400">({reports.length})</span>
+        </p>
+      </div>
+      <div className="overflow-x-auto rounded-md border border-zinc-200 bg-white">
+        <table className="min-w-full divide-y divide-zinc-100 text-[11px]">
+          <thead className="bg-zinc-50">
+            <tr>
+              <th className="whitespace-nowrap px-2.5 py-1.5 text-left font-semibold uppercase tracking-wide text-zinc-600">
+                Date
+              </th>
+              {cols.map((f) => (
+                <th
+                  key={f.key}
+                  className="whitespace-nowrap px-2.5 py-1.5 text-left font-semibold uppercase tracking-wide text-zinc-600"
+                >
+                  {f.label || f.key}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-100">
+            {reports.map((r) => (
+              <tr key={r.id || r.date} className="align-top">
+                <td className="whitespace-nowrap px-2.5 py-1.5 font-medium text-zinc-800">
+                  {formatPretty(r.date)}
+                </td>
+                {cols.map((f) => {
+                  const v = (r.data || {})[f.key];
+                  const s = v == null ? "" : String(v).trim();
+                  return (
+                    <td
+                      key={f.key}
+                      className={`px-2.5 py-1.5 ${s ? "text-zinc-800" : "text-zinc-300"}`}
+                    >
+                      {s || "—"}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 
 function tintBg(color) {
   return {
