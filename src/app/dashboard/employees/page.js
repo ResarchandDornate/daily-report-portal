@@ -63,6 +63,52 @@ export default function AllEmployeesPage() {
     return counts;
   }, [weekReports, weekTotal]);
 
+  // "This month" attendance — fetch reports for the current calendar month
+  // (1st → end of month) and count distinct weekdays each employee filed on.
+  // Denominator is the total Mon-Fri count for the whole calendar month
+  // (not capped at today) so the cell shows e.g. "5 / 22 (Jun)".
+  const monthInfo = useMemo(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth(); // 0-indexed
+    const first = new Date(y, m, 1);
+    const last = new Date(y, m + 1, 0); // last day of current month
+    const iso = (d) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    let workdays = 0;
+    for (let d = 1; d <= last.getDate(); d += 1) {
+      const dow = new Date(y, m, d).getDay();
+      if (dow !== 0 && dow !== 6) workdays += 1;
+    }
+    return {
+      start: iso(first),
+      end: iso(last),
+      workdays,
+      label: first.toLocaleString(undefined, { month: "short" }),
+    };
+  }, []);
+  const { data: monthReports = [] } = useReports({
+    start: monthInfo.start,
+    end: monthInfo.end,
+  });
+  const monthSubmissionsByUser = useMemo(() => {
+    // Count distinct weekday dates per user (multiple submissions same day
+    // collapse to one).  Saturdays / Sundays are excluded so the ratio
+    // stays out of `<total>` (which is Mon-Fri only).
+    const dayKeysByUser = {};
+    for (const r of monthReports) {
+      const dow = new Date(r.date + "T00:00:00").getDay();
+      if (dow === 0 || dow === 6) continue;
+      const set = (dayKeysByUser[r.user_id] = dayKeysByUser[r.user_id] || new Set());
+      set.add(r.date);
+    }
+    const counts = {};
+    for (const [uid, s] of Object.entries(dayKeysByUser)) {
+      counts[uid] = s.size;
+    }
+    return counts;
+  }, [monthReports]);
+
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -80,7 +126,17 @@ export default function AllEmployeesPage() {
           (e.title || "").toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => fullName(a).localeCompare(fullName(b)));
+      // Primary: department name (A→Z, empty depts pinned to the bottom).
+      // Secondary: employee full name within the same department.
+      .sort((a, b) => {
+        const da = a.department?.name || "";
+        const db = b.department?.name || "";
+        if (!da && db) return 1;
+        if (da && !db) return -1;
+        const deptCmp = da.localeCompare(db);
+        if (deptCmp !== 0) return deptCmp;
+        return fullName(a).localeCompare(fullName(b));
+      });
   }, [employees, query, deptFilter, orgFilter]);
 
   return (
@@ -185,14 +241,15 @@ export default function AllEmployeesPage() {
             <Table.Th>Reporting Manager</Table.Th>
             <Table.Th>Date of Joining</Table.Th>
             <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
+            <Table.Th className="whitespace-nowrap text-center">This Month</Table.Th>
             <Table.Th />
           </Table.Row>
         </Table.Head>
         <Table.Body>
           {isLoading ? (
-            <Table.Empty colSpan={8} message="Loading employees…" />
+            <Table.Empty colSpan={9} message="Loading employees…" />
           ) : filtered.length === 0 ? (
-            <Table.Empty colSpan={8} message={query || deptFilter !== "all" || orgFilter !== "all" ? "No employees match the current filters." : "No employees found."} />
+            <Table.Empty colSpan={9} message={query || deptFilter !== "all" || orgFilter !== "all" ? "No employees match the current filters." : "No employees found."} />
           ) : (
             filtered.map((emp, i) => {
               const dept = emp.department;
@@ -233,6 +290,13 @@ export default function AllEmployeesPage() {
                   </Table.Td>
                   <Table.Td className="align-top text-center">
                     <WeekBadge count={submissionsByUser[emp.id] || 0} total={weekTotal} />
+                  </Table.Td>
+                  <Table.Td className="align-top text-center">
+                    <MonthBadge
+                      count={monthSubmissionsByUser[emp.id] || 0}
+                      total={monthInfo.workdays}
+                      label={monthInfo.label}
+                    />
                   </Table.Td>
                   <Table.Td className="align-top text-right">
                     <div className="flex items-center justify-end gap-2">
@@ -847,6 +911,30 @@ function WeekBadge({ count, total = 5 }) {
       className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
     >
       {count} / {total}
+    </span>
+  );
+}
+
+function MonthBadge({ count, total, label }) {
+  // Same colour ladder as WeekBadge but scaled to the calendar month:
+  // green when fully caught up, amber when one workday short, rose
+  // otherwise.  The month abbreviation sits above the count so it's clear
+  // which calendar month the "<filled> / <total>" ratio refers to.
+  const tone =
+    total === 0 ? "bg-zinc-100 text-zinc-500 ring-zinc-200"
+    : count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : count >= total - 1 && total >= 2 ? "bg-amber-50 text-amber-800 ring-amber-200"
+    : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
+    : "bg-zinc-100 text-zinc-500 ring-zinc-200";
+  return (
+    <span
+      title={`${count} of ${total} working day${total === 1 ? "" : "s"} submitted in ${label}`}
+      className={`inline-flex flex-col items-center rounded-md px-2 py-0.5 text-[11px] font-semibold leading-tight ring-1 ${tone}`}
+    >
+      <span className="text-[9px] font-medium uppercase tracking-wide opacity-80">
+        {label}
+      </span>
+      <span>{count} / {total}</span>
     </span>
   );
 }
