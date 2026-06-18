@@ -637,9 +637,9 @@ function ExpandedEmployeeReports({ emp, reports, reportFields }) {
           <span className="ml-1.5 text-zinc-400">({reports.length})</span>
         </p>
       </div>
-      <div className="overflow-x-auto rounded-md border border-zinc-200 bg-white">
+      <div className="max-h-80 overflow-auto rounded-md border border-zinc-200 bg-white">
         <table className="min-w-full divide-y divide-zinc-100 text-[11px]">
-          <thead className="bg-zinc-50">
+          <thead className="sticky top-0 z-10 bg-zinc-50 shadow-[inset_0_-1px_0_0_var(--color-zinc-200)]">
             <tr>
               <th className="whitespace-nowrap px-2.5 py-1.5 text-left font-semibold uppercase tracking-wide text-zinc-600">
                 Date
