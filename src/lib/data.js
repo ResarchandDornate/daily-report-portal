@@ -419,8 +419,29 @@ export function downloadFile(filename, content, mime = "text/plain") {
 }
 
 export function shareViaEmail({ to = "", subject, body }) {
-  const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-  window.location.href = url;
+  // Open Gmail's web compose URL in a new tab — works for anyone signed in
+  // to Gmail / Google Workspace and avoids the "Chrome doesn't know how to
+  // open mailto:" problem on machines without a default mail client.
+  // Multiple recipients are joined with raw commas (Gmail accepts both
+  // commas and URL-encoded `%2C`, but plain commas read better in URLs).
+  const addrs = String(to)
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(",");
+  const url =
+    `https://mail.google.com/mail/?view=cm&fs=1` +
+    `&to=${encodeURIComponent(addrs)}` +
+    `&su=${encodeURIComponent(subject || "")}` +
+    `&body=${encodeURIComponent(body || "")}`;
+  // Open in a new tab so the user's current dashboard stays open behind it.
+  const w = window.open(url, "_blank", "noopener");
+  // Pop-up blocked? Fall back to same-tab navigation so the user still gets
+  // there.  Toasts on the calling page will already have surfaced the
+  // "download → attach → send" reminder.
+  if (!w) {
+    window.location.href = url;
+  }
 }
 
 export function shareViaWhatsApp({ phone = "", text }) {

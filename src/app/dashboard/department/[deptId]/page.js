@@ -33,7 +33,20 @@ export default function DepartmentPage() {
   const updateDept = useUpdateDepartment();
   const deleteDept = useDeleteDepartment();
   const today = todayISO();
+  // HR can pick a date RANGE (from → to) to scope the "Submitted" column
+  // and subtitle.  Defaults to today→today (single-day behaviour).
+  const [dateFrom, setDateFrom] = useState(today);
+  const [dateTo, setDateTo] = useState(today);
+  // If the user reverses the range, normalise it on the fly so downstream
+  // comparisons are sane.
+  const rangeStart = dateFrom <= dateTo ? dateFrom : dateTo;
+  const rangeEnd   = dateFrom <= dateTo ? dateTo   : dateFrom;
+  const isSingleDay = rangeStart === rangeEnd;
+  const isTodayOnly = isSingleDay && rangeStart === today;
 
+  // The "This Week" badge always tracks the current calendar week — it is
+  // independent of the range filter so HR can still spot this week's gaps
+  // even while scoping the rest of the table to a past window.
   const week = useMemo(() => getWeekRange(), []);
   const weekTotal = 5; // full Mon-Fri week — numerator is "day index reached"
 
@@ -113,11 +126,14 @@ export default function DepartmentPage() {
       .map((emp) => {
         const empReports = reports.filter((r) => r.user_id === emp.id);
         const last = [...empReports].sort((a, b) => b.date.localeCompare(a.date))[0];
-        const submittedToday = empReports.some((r) => r.date === today);
-        // Use "latest workday index this week" as the numerator — so
-        // submitting today (e.g. Tue / day-2) reads as 2/2 even if Monday
-        // was skipped, and missing today caps the badge at the last
-        // submitted day's index.
+        // "Submitted" status is whether the employee filed at least one
+        // report within the selected from → to range.
+        const submittedToday = empReports.some(
+          (r) => r.date >= rangeStart && r.date <= rangeEnd,
+        );
+        // Use "latest workday index in the selected week" as the numerator.
+        // The window slides with `selectedDate`, so picking a date in a past
+        // week shows that week's full attendance.
         let maxDow = 0;
         for (const r of empReports) {
           if (r.date < week.start || r.date > week.end) continue;
@@ -157,7 +173,7 @@ export default function DepartmentPage() {
           (emp.email || "").toLowerCase().includes(q)
         );
       });
-  }, [employees, reports, today, query, week, weekTotal, monthRange, elapsedWorkdays, meetingsField]);
+  }, [employees, reports, rangeStart, rangeEnd, query, week, weekTotal, monthRange, elapsedWorkdays, meetingsField]);
 
   if (deptsLoading) {
     return (
@@ -194,7 +210,14 @@ export default function DepartmentPage() {
               <h1 className="text-base font-semibold tracking-tight text-zinc-900">{dept.name}</h1>
               <p className="text-[11px] text-zinc-600">
                 {employees.length} {employees.length === 1 ? "employee" : "employees"} •{" "}
-                <span className="font-medium text-emerald-700">{submittedCount} submitted today</span>
+                <span className="font-medium text-emerald-700">
+                  {submittedCount} submitted{" "}
+                  {isTodayOnly
+                    ? "today"
+                    : isSingleDay
+                    ? `on ${formatPretty(rangeStart)}`
+                    : `between ${formatPretty(rangeStart)} → ${formatPretty(rangeEnd)}`}
+                </span>
               </p>
             </div>
           </div>
@@ -212,16 +235,55 @@ export default function DepartmentPage() {
         </div>
       </header>
 
-      {/* Search */}
-      <div className="relative">
-        <SearchIcon className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder={`Search ${dept.name}…`}
-          className="block w-full rounded-md border border-zinc-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
-        />
+      {/* Search + date filter */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="relative flex-1">
+          <SearchIcon className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${dept.name}…`}
+            className="block w-full rounded-md border border-zinc-300 bg-white py-1.5 pl-8 pr-2.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+          />
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <label htmlFor="dept-date-from" className="text-[11px] font-medium text-zinc-600">
+            From
+          </label>
+          <input
+            id="dept-date-from"
+            type="date"
+            value={dateFrom}
+            max={today}
+            onChange={(e) => setDateFrom(e.target.value || today)}
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+          />
+          <label htmlFor="dept-date-to" className="text-[11px] font-medium text-zinc-600">
+            To
+          </label>
+          <input
+            id="dept-date-to"
+            type="date"
+            value={dateTo}
+            max={today}
+            min={dateFrom}
+            onChange={(e) => setDateTo(e.target.value || today)}
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+          />
+          {!isTodayOnly && (
+            <button
+              type="button"
+              onClick={() => {
+                setDateFrom(today);
+                setDateTo(today);
+              }}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+            >
+              Today
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -239,7 +301,13 @@ export default function DepartmentPage() {
               </Table.Th>
             )}
             <Table.Th>Email</Table.Th>
-            <Table.Th>Today</Table.Th>
+            <Table.Th className="whitespace-nowrap">
+              {isTodayOnly
+                ? "Today"
+                : isSingleDay
+                ? formatPretty(rangeStart)
+                : `${formatPretty(rangeStart)} → ${formatPretty(rangeEnd)}`}
+            </Table.Th>
             <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
             <Table.Th>Total Reports</Table.Th>
             <Table.Th>Last Submission</Table.Th>

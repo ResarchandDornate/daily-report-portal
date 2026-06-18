@@ -87,6 +87,7 @@ export default function DashboardLayout({ children }) {
       requiresTeamHead: true,
     },
     { href: "/dashboard/employees", label: "All Employees", icon: "users", roles: ["hr"] },
+    { href: "/dashboard/employees-left", label: "Employees Left", icon: "userMinus", roles: ["hr"] },
     { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
     {
       label: "Departments",
@@ -463,6 +464,7 @@ function NavIcon({ name, className = "" }) {
   if (name === "chart") return (<svg {...props}><path d="M3 3v18h18" /><path d="M7 14l4-4 4 4 5-6" /></svg>);
   if (name === "users") return (<svg {...props}><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><circle cx="17" cy="9" r="3" /><path d="M22 21v-1a3 3 0 0 0-3-3h-2" /></svg>);
   if (name === "upload") return (<svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>);
+  if (name === "userMinus") return (<svg {...props}><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><path d="M17 11h6" /></svg>);
   return null;
 }
 

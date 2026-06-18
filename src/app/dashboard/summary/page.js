@@ -23,7 +23,10 @@ export default function SummaryPage() {
   const [audience, setAudience] = useState("CEO");
   const [preset, setPreset] = useState("weekly");
   const [shareOpen, setShareOpen] = useState(false);
-  const [ceoEmail, setCeoEmail] = useState("ceo@ornatesolar.com");
+  // Fixed CEO / leadership recipient list — HR can still edit before sending.
+  const [ceoEmail, setCeoEmail] = useState(
+    "aditya.goel@ornatesolar.com, anisha@ornatesolar.com, tarini@ornatesolar.com, hr.ornatesolar@gmail.com",
+  );
   const [ceoPhone, setCeoPhone] = useState("");
 
   const { data: departments = [] } = useDepartments();
@@ -120,25 +123,32 @@ export default function SummaryPage() {
     }
   }
 
-  function downloadText() {
-    downloadFile(`summary_${start}_to_${end}.txt`, summaryText, "text/plain");
-  }
-
   function copyText() {
     if (typeof navigator === "undefined") return;
     navigator.clipboard?.writeText(summaryText);
   }
 
-  function emailSummary() {
-    shareViaEmail({
-      to: ceoEmail,
-      subject: `Daily Report Summary — ${formatPretty(start)} to ${formatPretty(end)}`,
-      body: summaryText,
-    });
+  // Email / WhatsApp now share the EXCEL file, not the plain-text summary.
+  // Browsers can't auto-attach files via mailto: / wa.me, so we:
+  //   1. Generate + download the Excel locally (so HR has it)
+  //   2. Open the mail / WhatsApp compose window with a short message
+  //   3. Toast a reminder so HR attaches the just-downloaded file
+  async function emailSummary() {
+    await exportExcel();
+    const subject = `Daily Report Summary — ${formatPretty(start)} to ${formatPretty(end)}`;
+    const body =
+      `Hi,\n\nPlease find the Daily Report Excel summary attached ` +
+      `(${formatPretty(start)} → ${formatPretty(end)}).\n\nRegards`;
+    shareViaEmail({ to: ceoEmail, subject, body });
+    toast.success("Excel downloaded. Attach it to the email window before sending.");
   }
 
-  function whatsappSummary() {
-    shareViaWhatsApp({ phone: ceoPhone, text: summaryText });
+  async function whatsappSummary() {
+    await exportExcel();
+    const text =
+      `Daily Report Excel summary (${formatPretty(start)} → ${formatPretty(end)}) attached.`;
+    shareViaWhatsApp({ phone: ceoPhone, text });
+    toast.success("Excel downloaded. Attach it to the WhatsApp window before sending.");
   }
 
   return (
@@ -226,7 +236,6 @@ export default function SummaryPage() {
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
             <ActionBtn onClick={copyText} icon="copy">Copy</ActionBtn>
-            <ActionBtn onClick={downloadText} icon="download">Download .txt</ActionBtn>
             <ActionBtn onClick={exportExcel} icon="download" tone="dark" disabled={exporting}>
               {exporting ? "Preparing…" : "Excel"}
             </ActionBtn>
@@ -239,12 +248,12 @@ export default function SummaryPage() {
         {shareOpen && (
           <div className="space-y-3 border-b border-zinc-100 bg-zinc-50 px-4 py-3">
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-              <Field label="CEO email">
+              <Field label="Recipient emails (comma-separated)">
                 <input
-                  type="email"
+                  type="text"
                   value={ceoEmail}
                   onChange={(e) => setCeoEmail(e.target.value)}
-                  placeholder="ceo@example.com"
+                  placeholder="aditya.goel@ornatesolar.com, anisha@…"
                   className={inputClass}
                 />
               </Field>
@@ -274,7 +283,9 @@ export default function SummaryPage() {
                 Send via WhatsApp
               </button>
               <p className="text-[10px] text-zinc-500">
-                Email opens your default mail app pre-filled. WhatsApp opens wa.me with the summary.
+                Both buttons first download the Excel file, then open a new
+                tab — Gmail web compose for Email, WhatsApp Web for WhatsApp.
+                Attach the downloaded Excel in that new tab and click Send.
               </p>
             </div>
           </div>
