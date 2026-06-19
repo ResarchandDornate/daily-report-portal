@@ -163,12 +163,17 @@ export default function MyReportPage() {
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                max={todayISO()}
+                // HR / admin: no max — they can pick ANY date (past or
+                // future) so they can backfill missed days or pre-create
+                // reports.  Regular employees stay capped at today.
+                max={me?.role === "hr" ? undefined : todayISO()}
                 className="rounded-md border border-orange-200 bg-white px-2.5 py-1 text-xs outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
               />
             </div>
             <p className="text-[10px] text-zinc-500">
-              Forgot a day? Pick a past date to fill it in.
+              {me?.role === "hr"
+                ? "Admin: pick any date — past or future."
+                : "Forgot a day? Pick a past date to fill it in."}
             </p>
           </div>
         </div>
