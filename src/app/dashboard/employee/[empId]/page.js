@@ -50,9 +50,14 @@ export default function EmployeePage() {
   const deleteReport = useDeleteReport();
   const [editing, setEditing] = useState(null); // null | the report row being edited
   const [editForm, setEditForm] = useState({});  // values keyed by field.key
+  // HR can also change the report's date.  Holds the picker value (the
+  // original date when the modal opens; HR edits the input to retarget the
+  // report onto a different day).
+  const [editDate, setEditDate] = useState("");
 
   function openEdit(report) {
     setEditing(report);
+    setEditDate(report.date);
     const initial = {};
     empFields.forEach((f) => { initial[f.key] = report.data?.[f.key] || ""; });
     setEditForm(initial);
@@ -60,13 +65,41 @@ export default function EmployeePage() {
   function closeEdit() {
     setEditing(null);
     setEditForm({});
+    setEditDate("");
   }
   async function saveEdit() {
     if (!editing) return;
     const cleaned = {};
     empFields.forEach((f) => { cleaned[f.key] = editForm[f.key] || ""; });
+    const targetDate = (isHR && editDate) ? editDate : editing.date;
+    const dateChanged = targetDate !== editing.date;
+
+    // Date change is destructive on the OTHER end if a report already
+    // exists at the new date — confirm overwrite before clobbering it.
+    if (dateChanged) {
+      const clash = myReports.find((r) => r.date === targetDate);
+      if (clash && clash.id !== editing.id) {
+        if (!confirm(
+          `A report already exists on ${formatPretty(targetDate)}. ` +
+          `Moving this report to that date will OVERWRITE the existing one. Continue?`,
+        )) return;
+      }
+    }
+
     try {
-      await submit.mutateAsync({ date: editing.date, data: cleaned, user_id: empId });
+      // 1) Upsert the report data at the (possibly new) target date.
+      await submit.mutateAsync({ date: targetDate, data: cleaned, user_id: empId });
+      // 2) If the date was moved, remove the report at the OLD date so we
+      //    don't leave a duplicate.  Done AFTER the new write succeeds so a
+      //    failed write doesn't lose the data.
+      if (dateChanged) {
+        try {
+          await deleteReport.mutateAsync(editing.id);
+        } catch {
+          /* the new-date upsert already succeeded; old row deletion is
+             nice-to-have, the toast surfaced any error */
+        }
+      }
       closeEdit();
     } catch {
       /* toast already fired by the mutation onError */
@@ -440,6 +473,26 @@ export default function EmployeePage() {
                 <CloseIcon className="h-4 w-4" />
               </button>
             </div>
+
+            {isHR && (
+              <div className="flex items-center gap-2 border-b border-zinc-100 bg-amber-50 px-4 py-2.5">
+                <label htmlFor="edit-report-date" className="text-[11px] font-semibold uppercase tracking-wide text-amber-900">
+                  Date
+                </label>
+                <input
+                  id="edit-report-date"
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value || editing.date)}
+                  className="rounded-md border border-amber-300 bg-white px-2 py-1 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                />
+                {editDate !== editing.date && (
+                  <span className="text-[11px] font-medium text-amber-800">
+                    Moving from {formatPretty(editing.date)} → {formatPretty(editDate)}
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="grid max-h-[60vh] grid-cols-1 gap-3 overflow-y-auto p-4 sm:grid-cols-2">
               {empFields.map((f) => (
