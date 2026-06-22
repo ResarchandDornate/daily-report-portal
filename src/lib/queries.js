@@ -412,3 +412,72 @@ export function useDeleteReport() {
     },
   });
 }
+
+// ---- Expense claims ----
+
+const qkExpenses = ["expenses"];
+
+export function useExpenses() {
+  return useQuery({
+    queryKey: qkExpenses,
+    queryFn: () => api.get("/api/expenses").then((r) => r.data),
+  });
+}
+
+export function useCreateExpense() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ date, mode, expense_type, travel_type, amount, remarks, bills }) => {
+      const fd = new FormData();
+      fd.append("date", date);
+      fd.append("mode", mode || "");
+      fd.append("expense_type", expense_type);
+      if (travel_type) fd.append("travel_type", travel_type);
+      fd.append("amount", String(amount));
+      if (remarks) fd.append("remarks", remarks);
+      // Multi-file: append once per file under the same field name so the
+      // FastAPI endpoint receives them as `bills: list[UploadFile]`.
+      for (const f of (bills || [])) {
+        if (f) fd.append("bills", f);
+      }
+      return api
+        .post("/api/expenses", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+        .then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Expense submitted — awaiting approval");
+    },
+    onError: (err) => toast.error(err.message || "Failed to submit expense"),
+  });
+}
+
+export function useDecideExpense() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, decision, note }) =>
+      api
+        .post(`/api/expenses/${id}/decide`, { decision, note: note || "" })
+        .then((r) => r.data),
+    onSuccess: (row) => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      const verb = row?.status === "approved" ? "Approved" : "Rejected";
+      toast.success(`${verb}`);
+    },
+    onError: (err) => toast.error(err.message || "Failed to decide expense"),
+  });
+}
+
+export function useDeleteExpense() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api.delete(`/api/expenses/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Expense deleted");
+    },
+    onError: (err) => toast.error(err.message || "Failed to delete expense"),
+  });
+}

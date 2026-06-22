@@ -40,7 +40,11 @@ export default function DashboardLayout({ children }) {
   useEffect(() => {
     if (!me) return;
     if (me.role === "hr") return;
-    const employeePaths = ["/dashboard", "/dashboard/my-report"];
+    const employeePaths = [
+      "/dashboard",
+      "/dashboard/my-report",
+      "/dashboard/expense",
+    ];
     // Inside Sales and Sales Service employees get one extra page for their
     // calling / customer-service sheets.
     if (["insideSales", "salesService"].includes(me.department?.slug)) {
@@ -69,6 +73,7 @@ export default function DashboardLayout({ children }) {
   const NAV = [
     { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
     { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
+    { href: "/dashboard/expense", label: "Expense", icon: "wallet", roles: ["hr", "employee"] },
     {
       href: "/dashboard/sales-uploads",
       label: "Sales Sheets",
@@ -465,6 +470,7 @@ function NavIcon({ name, className = "" }) {
   if (name === "users") return (<svg {...props}><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><circle cx="17" cy="9" r="3" /><path d="M22 21v-1a3 3 0 0 0-3-3h-2" /></svg>);
   if (name === "upload") return (<svg {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M17 8l-5-5-5 5" /><path d="M12 3v12" /></svg>);
   if (name === "userMinus") return (<svg {...props}><circle cx="9" cy="8" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" /><path d="M17 11h6" /></svg>);
+  if (name === "wallet") return (<svg {...props}><path d="M3 7a2 2 0 0 1 2-2h13a2 2 0 0 1 2 2v3" /><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-3" /><path d="M21 10h-4a2 2 0 0 0 0 4h4" /></svg>);
   return null;
 }
 
