@@ -569,6 +569,8 @@ function groupExpensesByUser(expenses) {
         pendingCount: 0,
         approvedCount: 0,
         rejectedCount: 0,
+        onHoldCount: 0,
+        withBillsCount: 0,
         latestExpenseDate: e.date,
         latestSubmitAt: e.created_at,
       });
@@ -579,6 +581,8 @@ function groupExpensesByUser(expenses) {
     if (e.status === "pending") g.pendingCount += 1;
     else if (e.status === "approved") g.approvedCount += 1;
     else if (e.status === "rejected") g.rejectedCount += 1;
+    else if (e.status === "onhold") g.onHoldCount += 1;
+    if ((e.bills || []).length > 0) g.withBillsCount += 1;
     if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
     if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
   }
@@ -599,15 +603,16 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
           <Table.Th>Employee</Table.Th>
           <Table.Th>Total Amount</Table.Th>
           <Table.Th>Status</Table.Th>
+          <Table.Th>Bills</Table.Th>
           <Table.Th>Submit Date</Table.Th>
           <Table.Th className="text-right">Actions</Table.Th>
         </Table.Row>
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={6} message="Loading expenses…" />
+          <Table.Empty colSpan={7} message="Loading expenses…" />
         ) : groups.length === 0 ? (
-          <Table.Empty colSpan={6} message="No expenses to review yet." />
+          <Table.Empty colSpan={7} message="No expenses to review yet." />
         ) : (
           groups.map((g) => (
             <Table.Row
@@ -633,7 +638,11 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   pending={g.pendingCount}
                   approved={g.approvedCount}
                   rejected={g.rejectedCount}
+                  onHold={g.onHoldCount}
                 />
+              </Table.Td>
+              <Table.Td>
+                <BillCountIndicator withBills={g.withBillsCount} total={g.expenses.length} />
               </Table.Td>
               <Table.Td className="whitespace-nowrap text-zinc-700">
                 {g.latestSubmitAt
@@ -657,6 +666,14 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                     <button
                       type="button"
                       disabled={decidePending}
+                      onClick={() => onBatchDecide(g, "onhold")}
+                      className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                    >
+                      On Hold
+                    </button>
+                    <button
+                      type="button"
+                      disabled={decidePending}
                       onClick={() => onBatchDecide(g, "approved")}
                       className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                     >
@@ -675,11 +692,12 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   );
 }
 
-function StatusMix({ pending, approved, rejected }) {
+function StatusMix({ pending, approved, rejected, onHold }) {
   const items = [
-    { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",   label: "P" },
-    { count: approved, cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "A" },
-    { count: rejected, cls: "bg-rose-50 text-rose-700 ring-rose-200",       label: "R" },
+    { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",   label: "P",  title: "Pending"  },
+    { count: onHold,   cls: "bg-sky-50 text-sky-700 ring-sky-200",         label: "OH", title: "On Hold"  },
+    { count: approved, cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "A",  title: "Approved" },
+    { count: rejected, cls: "bg-rose-50 text-rose-700 ring-rose-200",       label: "R",  title: "Rejected" },
   ].filter((i) => i.count > 0);
   if (!items.length) return <span className="text-zinc-400">—</span>;
   return (
@@ -688,11 +706,7 @@ function StatusMix({ pending, approved, rejected }) {
         <span
           key={i.label}
           className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${i.cls}`}
-          title={
-            i.label === "P" ? "Pending"
-            : i.label === "A" ? "Approved"
-            : "Rejected"
-          }
+          title={i.title}
         >
           {i.label}: {i.count}
         </span>
@@ -743,6 +757,7 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
                 <Table.Th>Mode</Table.Th>
                 <Table.Th className="text-right">Amount</Table.Th>
                 <Table.Th>Status</Table.Th>
+                <Table.Th>Bill</Table.Th>
                 <Table.Th>Remarks</Table.Th>
                 <Table.Th />
               </Table.Row>
@@ -768,6 +783,9 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
                   <Table.Td>
                     <StatusPill status={r.status} />
                   </Table.Td>
+                  <Table.Td>
+                    <BillIndicator count={(r.bills || []).length} />
+                  </Table.Td>
                   <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
                     {r.remarks || "—"}
                   </Table.Td>
@@ -786,6 +804,65 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
   );
 }
 
+function BillIndicator({ count }) {
+  if (count > 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200"
+        title={`${count} bill${count === 1 ? "" : "s"} attached`}
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+          <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.6l6.3-6.3a1 1 0 0 1 1.4 0Z" />
+        </svg>
+        {count > 1 && <span>{count}</span>}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center justify-center rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-600 ring-1 ring-rose-200"
+      title="No bill attached"
+    >
+      <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+        <path d="M4.7 4.7a1 1 0 0 1 1.4 0L10 8.6l3.9-3.9a1 1 0 1 1 1.4 1.4L11.4 10l3.9 3.9a1 1 0 0 1-1.4 1.4L10 11.4l-3.9 3.9a1 1 0 1 1-1.4-1.4L8.6 10 4.7 6.1a1 1 0 0 1 0-1.4Z" />
+      </svg>
+    </span>
+  );
+}
+
+function BillCountIndicator({ withBills, total }) {
+  // Compact "✓ 3/6" / "✓ 6/6" / "✗ 0/6" used in the admin grouped table.
+  if (total === 0) return <span className="text-zinc-400">—</span>;
+  if (withBills === 0) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+        title={`No bills attached on any of ${total} expense(s)`}
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+          <path d="M4.7 4.7a1 1 0 0 1 1.4 0L10 8.6l3.9-3.9a1 1 0 1 1 1.4 1.4L11.4 10l3.9 3.9a1 1 0 0 1-1.4 1.4L10 11.4l-3.9 3.9a1 1 0 1 1-1.4-1.4L8.6 10 4.7 6.1a1 1 0 0 1 0-1.4Z" />
+        </svg>
+        0 / {total}
+      </span>
+    );
+  }
+  const allHave = withBills === total;
+  const cls = allHave
+    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : "bg-amber-50 text-amber-800 ring-amber-200";
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ring-1 ${cls}`}
+      title={`${withBills} of ${total} expense(s) have a bill attached`}
+    >
+      <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+        <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.6l6.3-6.3a1 1 0 0 1 1.4 0Z" />
+      </svg>
+      {withBills} / {total}
+    </span>
+  );
+}
+
 function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
   return (
     <Table maxHeight={520}>
@@ -797,16 +874,17 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
           <Table.Th>Mode</Table.Th>
           <Table.Th className="text-right">Amount</Table.Th>
           <Table.Th>Status</Table.Th>
+          <Table.Th>Bill</Table.Th>
           <Table.Th>Remarks</Table.Th>
           <Table.Th />
         </Table.Row>
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={isAdmin ? 8 : 7} message="Loading expenses…" />
+          <Table.Empty colSpan={isAdmin ? 9 : 8} message="Loading expenses…" />
         ) : rows.length === 0 ? (
           <Table.Empty
-            colSpan={isAdmin ? 8 : 7}
+            colSpan={isAdmin ? 9 : 8}
             message={isAdmin ? "No expenses to review yet." : "You haven't submitted any expenses yet."}
           />
         ) : (
@@ -838,6 +916,9 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
               <Table.Td>
                 <StatusPill status={r.status} />
               </Table.Td>
+              <Table.Td>
+                <BillIndicator count={(r.bills || []).length} />
+              </Table.Td>
               <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
                 {r.remarks || "—"}
               </Table.Td>
@@ -858,9 +939,11 @@ function StatusPill({ status }) {
   const cls =
     status === "approved" ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
     : status === "rejected" ? "bg-rose-50 text-rose-700 ring-rose-200"
+    : status === "onhold"   ? "bg-sky-50 text-sky-700 ring-sky-200"
     : "bg-amber-50 text-amber-800 ring-amber-200";
   const label = status === "approved" ? "Approved"
     : status === "rejected" ? "Rejected"
+    : status === "onhold"   ? "On Hold"
     : "Pending";
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ${cls}`}>
@@ -1031,6 +1114,14 @@ function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending
                 className="rounded-md border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
               >
                 {decidePending ? "…" : "Reject"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDecide("onhold", "")}
+                disabled={decidePending}
+                className="rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+              >
+                {decidePending ? "…" : "On Hold"}
               </button>
               <button
                 type="button"
