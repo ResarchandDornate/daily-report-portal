@@ -16,23 +16,43 @@ import { Table } from "@/components/Table";
 // for the helper-text banner only — the API still gates the decision call.
 const APPROVER_LABEL = "Tarini & Smita";
 
+// Order is intentional — matches HR's preferred sequence on the form, NOT
+// alphabetical.  Reorder here whenever the business wants it changed.
 const EXPENSE_TYPES = [
-  { value: "material", label: "Material" },
-  { value: "food",     label: "Food" },
-  { value: "travel",   label: "Travel" },
-  { value: "hotel",    label: "Hotel" },
-  { value: "fuel",     label: "Fuel" },
-  { value: "others",   label: "Others" },
+  { value: "travel",           label: "Travel" },
+  { value: "fuel",             label: "Fuel" },
+  { value: "material",         label: "Material" },
+  { value: "hotel",            label: "Hotel" },
+  { value: "officereimburse",  label: "Office Reimburse" },
+  { value: "others",           label: "Others" },
 ];
 
+// Top-level travel choices.  "other" opens a second sub-dropdown for the
+// less-common modes (bus / auto / metro).
 const TRAVEL_TYPES = [
-  { value: "bus",    label: "Bus" },
-  { value: "cab",    label: "Cab" },
-  { value: "bike",   label: "Bike" },
-  { value: "rapido", label: "Rapido" },
   { value: "car",    label: "Car" },
-  { value: "other",  label: "Other" },
+  { value: "bike",   label: "Bike" },
+  { value: "cab",    label: "Cab" },
+  { value: "rapido", label: "Rapido" },
+  { value: "other",  label: "Others" },
 ];
+
+const TRAVEL_SUBTYPES = [
+  { value: "bus",   label: "Bus" },
+  { value: "auto",  label: "Auto" },
+  { value: "metro", label: "Metro" },
+];
+
+// Per-km reimbursement rate (₹) for vehicles where the company pays by
+// distance.  0 = no preset, employee fills in.
+const PER_KM_RATES = {
+  car:    10,
+  bike:   5,
+  cab:    0,
+  rapido: 0,
+};
+
+const KM_BASED_TYPES = new Set(["car", "bike", "cab", "rapido"]);
 
 const MODES = [
   { value: "cash", label: "Cash" },
@@ -133,16 +153,59 @@ function ExpenseForm({ onSubmit, submitting }) {
   const [date, setDate] = useState(todayISO());
   const [mode, setMode] = useState("cash");
   const [expenseType, setExpenseType] = useState("material");
+  // Two-level travel selection.  travelType holds the top-level pick
+  // (car / bike / cab / rapido / other).  travelSubtype is only used
+  // when travelType === "other"; its value (bus / auto / metro) is what
+  // actually gets sent to the API as the final travel_type.
   const [travelType, setTravelType] = useState("");
+  const [travelSubtype, setTravelSubtype] = useState("");
+  // Distance + rate inputs, only relevant for car / bike / cab / rapido.
+  // Defaults fill in from PER_KM_RATES when travelType changes.
+  const [kilometers, setKilometers] = useState("");
+  const [ratePerKm, setRatePerKm] = useState("");
   const [amount, setAmount] = useState("");
   const [remarks, setRemarks] = useState("");
   const [bills, setBills] = useState([]);        // File[]
   const [previews, setPreviews] = useState([]);  // { name, url|null }[]
 
-  // Auto-clear travel sub-type when switching away from travel.
+  // Reset every travel-only field when switching away from travel.
   useEffect(() => {
-    if (expenseType !== "travel" && travelType) setTravelType("");
-  }, [expenseType, travelType]);
+    if (expenseType !== "travel") {
+      if (travelType) setTravelType("");
+      if (travelSubtype) setTravelSubtype("");
+      if (kilometers) setKilometers("");
+      if (ratePerKm) setRatePerKm("");
+    }
+  }, [expenseType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When travel type changes, pre-fill rate (Bike ₹5, Car ₹10; Cab/Rapido
+  // stay editable from 0), clear the distance, and reset the sub-type if
+  // we've moved away from "Others".
+  useEffect(() => {
+    if (KM_BASED_TYPES.has(travelType)) {
+      setRatePerKm(String(PER_KM_RATES[travelType] ?? 0));
+      setKilometers("");
+    } else {
+      setRatePerKm("");
+      setKilometers("");
+    }
+    if (travelType !== "other" && travelSubtype) {
+      setTravelSubtype("");
+    }
+  }, [travelType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-compute amount = km × rate whenever either changes.  Users can
+  // still type a custom amount afterwards; the next km/rate change will
+  // re-overwrite it (that's the trade-off for keeping the auto-fill simple).
+  useEffect(() => {
+    if (!KM_BASED_TYPES.has(travelType)) return;
+    const km = parseFloat(kilometers);
+    const rate = parseFloat(ratePerKm);
+    if (Number.isFinite(km) && Number.isFinite(rate) && km >= 0 && rate >= 0) {
+      const computed = Math.round(km * rate);
+      setAmount(String(computed));
+    }
+  }, [kilometers, ratePerKm, travelType]);
 
   // Build object-URL previews for any image bills.  PDFs / other files
   // render as a name-only card with no `url`.  Cleaned up on unmount or
@@ -197,17 +260,38 @@ function ExpenseForm({ onSubmit, submitting }) {
       toast.error("Amount must be a non-negative number.");
       return;
     }
-    if (expenseType === "travel" && !travelType) {
-      toast.error("Pick a travel type (bus, cab, bike, etc.) when submitting a travel expense.");
-      return;
+    let finalTravelType = "";
+    if (expenseType === "travel") {
+      if (!travelType) {
+        toast.error("Pick a travel type (car, bike, cab, rapido, or others).");
+        return;
+      }
+      if (travelType === "other") {
+        if (!travelSubtype) {
+          toast.error("Pick the sub-mode (bus, auto, metro).");
+          return;
+        }
+        finalTravelType = travelSubtype;
+      } else {
+        finalTravelType = travelType;
+      }
     }
+
+    // Audit prefix on km-based travel — gives the approver a clear breakdown
+    // of how the amount was derived (km × rate).
+    let finalRemarks = remarks.trim();
+    if (KM_BASED_TYPES.has(travelType) && kilometers && ratePerKm) {
+      const audit = `${kilometers} km × ₹${ratePerKm}/km = ₹${amt}`;
+      finalRemarks = finalRemarks ? `${audit} — ${finalRemarks}` : audit;
+    }
+
     onSubmit({
       date,
       mode,
       expense_type: expenseType,
-      travel_type: travelType,
+      travel_type: finalTravelType,
       amount: amt,
-      remarks: remarks.trim(),
+      remarks: finalRemarks,
       bills,
     }).then(() => {
       // Reset form on success — keep date so multiple same-day submissions
@@ -215,6 +299,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       setAmount("");
       setRemarks("");
       setBills([]);
+      setKilometers("");
     });
   }
 
@@ -268,6 +353,49 @@ function ExpenseForm({ onSubmit, submitting }) {
               ))}
             </select>
           </Field>
+        )}
+        {expenseType === "travel" && travelType === "other" && (
+          <Field label="Sub-mode">
+            <select
+              value={travelSubtype}
+              onChange={(e) => setTravelSubtype(e.target.value)}
+              className={inputClass}
+              required
+            >
+              <option value="">Select…</option>
+              {TRAVEL_SUBTYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+        {expenseType === "travel" && KM_BASED_TYPES.has(travelType) && (
+          <>
+            <Field label="Distance (km)">
+              <input
+                type="number"
+                min={0}
+                step="0.1"
+                value={kilometers}
+                onChange={(e) => setKilometers(e.target.value)}
+                placeholder="0"
+                className={inputClass}
+                required
+              />
+            </Field>
+            <Field label="Rate (₹ / km)">
+              <input
+                type="number"
+                min={0}
+                step="0.5"
+                value={ratePerKm}
+                onChange={(e) => setRatePerKm(e.target.value)}
+                placeholder="0"
+                className={inputClass}
+                required
+              />
+            </Field>
+          </>
         )}
         <Field label="Amount (₹)">
           <input
