@@ -20,8 +20,9 @@ const APPROVER_LABEL = "Tarini & Smita";
 // alphabetical.  Reorder here whenever the business wants it changed.
 const EXPENSE_TYPES = [
   { value: "travel",           label: "Travel" },
-  { value: "fuel",             label: "Fuel" },
-  { value: "material",         label: "Material" },
+  { value: "food",             label: "Food" },
+  { value: "sitematerial",     label: "Site Material" },
+  { value: "officematerial",   label: "Office Material" },
   { value: "hotel",            label: "Hotel" },
   { value: "officereimburse",  label: "Office Reimburse" },
   { value: "others",           label: "Others" },
@@ -74,55 +75,115 @@ export default function ExpensePage() {
     if (me.role === "hr") return true;
     return APPROVER_EMAILS.has((me.email || "").trim().toLowerCase());
   }, [me]);
+  // Tarini's account is review-only — she doesn't file her own expenses
+  // through this form.  Smita + HR still get the form because they can.
+  const isTariniReviewer = useMemo(() => {
+    if (!me) return false;
+    return (me.email || "").trim().toLowerCase() === "tarini@ornatesolar.com";
+  }, [me]);
 
   const { data: expenses = [], isLoading } = useExpenses();
   const createExpense = useCreateExpense();
   const decideExpense = useDecideExpense();
   const deleteExpense = useDeleteExpense();
 
-  const [openModal, setOpenModal] = useState(null); // null | expense row
+  // Two-tier modal state for the admin view: first a list of all expenses
+  // for one employee, then a per-expense detail modal opened from that list.
+  // Employee view skips the employee modal and goes straight to detail.
+  const [empModal, setEmpModal] = useState(null);   // { userId, userName, expenses[] } | null
+  const [openModal, setOpenModal] = useState(null); // single expense row | null
+
+  // Total amount across all currently-visible expenses (admin sees company-
+  // wide total; employees see their own grand total).  Formatted in Indian
+  // notation — ₹1,23,456 — via toLocaleString('en-IN').
+  const totalAmount = useMemo(
+    () => expenses.reduce((sum, e) => sum + (e.amount || 0), 0),
+    [expenses],
+  );
+  const totalAmountText = useMemo(
+    () => `₹${totalAmount.toLocaleString("en-IN")}`,
+    [totalAmount],
+  );
 
   return (
     <div className="space-y-4">
       <header className="relative overflow-hidden rounded-lg border border-orange-100 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-2.5 shadow-soft">
         <div aria-hidden className="absolute inset-0 bg-dot-pattern opacity-40" />
         <div className="relative flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-orange-700 ring-1 ring-orange-200">
-              <span className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-              Expenses
-            </span>
-            <div className="leading-tight">
-              <h1 className="text-base font-semibold tracking-tight text-zinc-900">
-                {isAdmin ? "Expense approvals" : "My Expenses"}
-              </h1>
-              <p className="text-[11px] text-zinc-600">
-                {isAdmin
-                  ? `Review and decide expense claims submitted across the company.`
-                  : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
-              </p>
-            </div>
+          <div className="leading-tight">
+            <h1 className="text-base font-semibold tracking-tight text-zinc-900">
+              {isAdmin ? "Expense approvals" : "My Expenses"}
+            </h1>
+            <p className="text-[11px] text-zinc-600">
+              {isAdmin
+                ? `Review and decide expense claims submitted across the company.`
+                : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
+            </p>
           </div>
+          {/* Total expense — plain inline text, Indian numbering. */}
+          <p className="text-sm font-semibold tabular-nums text-zinc-900">
+            Total Expense = <span className="text-orange-700">{totalAmountText}</span>
+          </p>
         </div>
       </header>
 
-      {/* Employee form — admins can also submit. */}
-      <ExpenseForm onSubmit={async (payload) => {
-        try {
-          await createExpense.mutateAsync(payload);
-        } catch {
-          /* toast fired by hook */
-        }
-      }} submitting={createExpense.isPending} />
+      {/* Submission form is hidden ONLY for Tarini (review-only account).
+          Smita, HR, and all other employees still see the full form. */}
+      {!isTariniReviewer && (
+        <ExpenseForm onSubmit={async (payload) => {
+          try {
+            await createExpense.mutateAsync(payload);
+          } catch {
+            /* toast fired by hook */
+          }
+        }} submitting={createExpense.isPending} />
+      )}
 
-      {/* Expense table */}
-      <ExpenseTable
-        rows={expenses}
-        isLoading={isLoading}
-        isAdmin={isAdmin}
-        onOpen={(row) => setOpenModal(row)}
-      />
+      {/* Admin: grouped table (one row per employee).
+          Employee: flat table (one row per expense). */}
+      {isAdmin ? (
+        <AdminEmployeeTable
+          expenses={expenses}
+          isLoading={isLoading}
+          decidePending={decideExpense.isPending}
+          onOpenEmployee={(group) => setEmpModal(group)}
+          onBatchDecide={async (group, decision) => {
+            const pending = group.expenses.filter((e) => e.status === "pending");
+            if (!pending.length) return;
+            const verb = decision === "approved" ? "approve" : "reject";
+            if (!confirm(
+              `${verb[0].toUpperCase() + verb.slice(1)} all ${pending.length} pending expense(s) `
+              + `for ${group.userName}? This sends ${verb} on each one.`,
+            )) return;
+            for (const e of pending) {
+              try {
+                // Sequentially — keeps DB pressure low and lets toasts settle.
+                await decideExpense.mutateAsync({ id: e.id, decision, note: "" });
+              } catch {
+                /* per-row toast already fired */
+              }
+            }
+          }}
+        />
+      ) : (
+        <ExpenseTable
+          rows={expenses}
+          isLoading={isLoading}
+          isAdmin={isAdmin}
+          onOpen={(row) => setOpenModal(row)}
+        />
+      )}
 
+      {/* Admin: per-employee modal listing every expense. */}
+      {empModal && (
+        <EmployeeExpensesModal
+          group={empModal}
+          onClose={() => setEmpModal(null)}
+          onOpenExpense={(row) => setOpenModal(row)}
+        />
+      )}
+
+      {/* Per-expense detail modal — used by both flows. */}
       {openModal && (
         <ExpenseModal
           row={openModal}
@@ -152,7 +213,7 @@ export default function ExpensePage() {
 function ExpenseForm({ onSubmit, submitting }) {
   const [date, setDate] = useState(todayISO());
   const [mode, setMode] = useState("cash");
-  const [expenseType, setExpenseType] = useState("material");
+  const [expenseType, setExpenseType] = useState("food");
   // Two-level travel selection.  travelType holds the top-level pick
   // (car / bike / cab / rapido / other).  travelSubtype is only used
   // when travelType === "other"; its value (bus / auto / metro) is what
@@ -476,6 +537,239 @@ function ExpenseForm({ onSubmit, submitting }) {
         </button>
       </div>
     </form>
+  );
+}
+
+// ---- Admin (Tarini / Smita / HR) — grouped per-employee table ----
+
+function groupExpensesByUser(expenses) {
+  const byUser = new Map();
+  for (const e of expenses) {
+    const key = e.user_id;
+    if (!byUser.has(key)) {
+      byUser.set(key, {
+        userId: e.user_id,
+        userName: e.user_name || "—",
+        userDepartment: e.user_department || "",
+        expenses: [],
+        total: 0,
+        pendingCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        latestExpenseDate: e.date,
+        latestSubmitAt: e.created_at,
+      });
+    }
+    const g = byUser.get(key);
+    g.expenses.push(e);
+    g.total += (e.amount || 0);
+    if (e.status === "pending") g.pendingCount += 1;
+    else if (e.status === "approved") g.approvedCount += 1;
+    else if (e.status === "rejected") g.rejectedCount += 1;
+    if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
+    if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
+  }
+  // Sort: pending count desc (most-urgent first), then by name.
+  return Array.from(byUser.values()).sort((a, b) => {
+    if (b.pendingCount !== a.pendingCount) return b.pendingCount - a.pendingCount;
+    return a.userName.localeCompare(b.userName);
+  });
+}
+
+function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide }) {
+  const groups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
+  return (
+    <Table maxHeight={520}>
+      <Table.Head>
+        <Table.Row>
+          <Table.Th>Date</Table.Th>
+          <Table.Th>Employee</Table.Th>
+          <Table.Th className="text-right">Total Amount</Table.Th>
+          <Table.Th>Status</Table.Th>
+          <Table.Th>Submit Date</Table.Th>
+          <Table.Th className="text-right">Actions</Table.Th>
+        </Table.Row>
+      </Table.Head>
+      <Table.Body>
+        {isLoading ? (
+          <Table.Empty colSpan={6} message="Loading expenses…" />
+        ) : groups.length === 0 ? (
+          <Table.Empty colSpan={6} message="No expenses to review yet." />
+        ) : (
+          groups.map((g) => (
+            <Table.Row
+              key={g.userId}
+              onClick={() => onOpenEmployee(g)}
+              className="cursor-pointer hover:bg-zinc-50"
+            >
+              <Table.Td className="whitespace-nowrap">{formatPretty(g.latestExpenseDate)}</Table.Td>
+              <Table.Td>
+                <div className="font-medium text-zinc-900">{g.userName}</div>
+                {g.userDepartment && (
+                  <div className="text-[10px] text-zinc-500">{g.userDepartment}</div>
+                )}
+                <div className="mt-0.5 text-[10px] text-zinc-400">
+                  {g.expenses.length} expense{g.expenses.length === 1 ? "" : "s"}
+                </div>
+              </Table.Td>
+              <Table.Td className="text-right tabular-nums font-semibold text-zinc-900">
+                ₹{(g.total || 0).toLocaleString("en-IN")}
+              </Table.Td>
+              <Table.Td>
+                <StatusMix
+                  pending={g.pendingCount}
+                  approved={g.approvedCount}
+                  rejected={g.rejectedCount}
+                />
+              </Table.Td>
+              <Table.Td className="whitespace-nowrap text-zinc-700">
+                {g.latestSubmitAt
+                  ? formatPretty(String(g.latestSubmitAt).slice(0, 10))
+                  : "—"}
+              </Table.Td>
+              <Table.Td className="text-right">
+                {g.pendingCount > 0 ? (
+                  <div
+                    className="flex items-center justify-end gap-1.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      disabled={decidePending}
+                      onClick={() => onBatchDecide(g, "rejected")}
+                      className="rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                    >
+                      Reject
+                    </button>
+                    <button
+                      type="button"
+                      disabled={decidePending}
+                      onClick={() => onBatchDecide(g, "approved")}
+                      className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                    >
+                      Approve
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-zinc-400">No pending</span>
+                )}
+              </Table.Td>
+            </Table.Row>
+          ))
+        )}
+      </Table.Body>
+    </Table>
+  );
+}
+
+function StatusMix({ pending, approved, rejected }) {
+  const items = [
+    { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",   label: "P" },
+    { count: approved, cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "A" },
+    { count: rejected, cls: "bg-rose-50 text-rose-700 ring-rose-200",       label: "R" },
+  ].filter((i) => i.count > 0);
+  if (!items.length) return <span className="text-zinc-400">—</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {items.map((i) => (
+        <span
+          key={i.label}
+          className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${i.cls}`}
+          title={
+            i.label === "P" ? "Pending"
+            : i.label === "A" ? "Approved"
+            : "Rejected"
+          }
+        >
+          {i.label}: {i.count}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
+  if (!group) return null;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-4xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">
+              {group.userName}&apos;s expenses
+            </h3>
+            <p className="text-[11px] text-zinc-500">
+              {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"} ·
+              {" "}
+              total ₹{(group.total || 0).toLocaleString("en-IN")}
+              {group.userDepartment && ` · ${group.userDepartment}`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-800"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="max-h-[75vh] overflow-y-auto p-4">
+          <Table maxHeight={520}>
+            <Table.Head>
+              <Table.Row>
+                <Table.Th>Date</Table.Th>
+                <Table.Th>Type</Table.Th>
+                <Table.Th>Mode</Table.Th>
+                <Table.Th className="text-right">Amount</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Remarks</Table.Th>
+                <Table.Th />
+              </Table.Row>
+            </Table.Head>
+            <Table.Body>
+              {group.expenses.map((r) => (
+                <Table.Row
+                  key={r.id}
+                  onClick={() => onOpenExpense(r)}
+                  className="cursor-pointer hover:bg-zinc-50"
+                >
+                  <Table.Td className="whitespace-nowrap">{formatPretty(r.date)}</Table.Td>
+                  <Table.Td>
+                    <span className="capitalize">{r.expense_type}</span>
+                    {r.travel_type && (
+                      <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
+                    )}
+                  </Table.Td>
+                  <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
+                  <Table.Td className="text-right tabular-nums font-medium">
+                    ₹{(r.amount || 0).toLocaleString("en-IN")}
+                  </Table.Td>
+                  <Table.Td>
+                    <StatusPill status={r.status} />
+                  </Table.Td>
+                  <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
+                    {r.remarks || "—"}
+                  </Table.Td>
+                  <Table.Td className="text-right">
+                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600">
+                      Open →
+                    </span>
+                  </Table.Td>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table>
+        </div>
+      </div>
+    </div>
   );
 }
 
