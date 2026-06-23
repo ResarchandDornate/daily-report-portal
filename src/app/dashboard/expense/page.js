@@ -63,23 +63,36 @@ const MODES = [
   { value: "other", label: "Other" },
 ];
 
-const APPROVER_EMAILS = new Set([
-  "tarini@ornatesolar.com",
-  "smita@ornatesolar.com",
-]);
+// Approver detection — match by the LOCAL PART of the email (before "@"),
+// so variants like `tarini.aggrawal@ornatesolar.com` and `smita.s@…` still
+// resolve to the right approver.  The local part is checked against a
+// prefix list, so `tarini`, `tarini.aggrawal`, `tarini_a`, etc. all match.
+const APPROVER_LOCAL_PREFIXES = ["tarini", "smita"];
+
+function _isApproverEmail(email) {
+  const local = (email || "").trim().toLowerCase().split("@")[0] || "";
+  return APPROVER_LOCAL_PREFIXES.some(
+    (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
+  );
+}
+
+function _isTariniEmail(email) {
+  const local = (email || "").trim().toLowerCase().split("@")[0] || "";
+  return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
+}
 
 export default function ExpensePage() {
   const { data: me } = useMe();
   const isAdmin = useMemo(() => {
     if (!me) return false;
     if (me.role === "hr") return true;
-    return APPROVER_EMAILS.has((me.email || "").trim().toLowerCase());
+    return _isApproverEmail(me.email);
   }, [me]);
   // Tarini's account is review-only — she doesn't file her own expenses
   // through this form.  Smita + HR still get the form because they can.
   const isTariniReviewer = useMemo(() => {
     if (!me) return false;
-    return (me.email || "").trim().toLowerCase() === "tarini@ornatesolar.com";
+    return _isTariniEmail(me.email);
   }, [me]);
 
   const { data: expenses = [], isLoading } = useExpenses();
@@ -584,7 +597,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
         <Table.Row>
           <Table.Th>Date</Table.Th>
           <Table.Th>Employee</Table.Th>
-          <Table.Th className="text-right">Total Amount</Table.Th>
+          <Table.Th>Total Amount</Table.Th>
           <Table.Th>Status</Table.Th>
           <Table.Th>Submit Date</Table.Th>
           <Table.Th className="text-right">Actions</Table.Th>
@@ -612,7 +625,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   {g.expenses.length} expense{g.expenses.length === 1 ? "" : "s"}
                 </div>
               </Table.Td>
-              <Table.Td className="text-right tabular-nums font-semibold text-zinc-900">
+              <Table.Td className="tabular-nums font-semibold text-zinc-900">
                 ₹{(g.total || 0).toLocaleString("en-IN")}
               </Table.Td>
               <Table.Td>
@@ -696,15 +709,15 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+        className="w-full max-w-6xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-5 py-4">
           <div>
-            <h3 className="text-sm font-semibold text-zinc-900">
+            <h3 className="text-base font-semibold text-zinc-900">
               {group.userName}&apos;s expenses
             </h3>
-            <p className="text-[11px] text-zinc-500">
+            <p className="text-xs text-zinc-500">
               {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"} ·
               {" "}
               total ₹{(group.total || 0).toLocaleString("en-IN")}
@@ -714,15 +727,15 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-800"
+            className="rounded-md p-1.5 text-zinc-500 hover:bg-white hover:text-zinc-800"
             aria-label="Close"
           >
             ✕
           </button>
         </div>
 
-        <div className="max-h-[75vh] overflow-y-auto p-4">
-          <Table maxHeight={520}>
+        <div className="max-h-[82vh] overflow-y-auto p-5">
+          <Table maxHeight={640}>
             <Table.Head>
               <Table.Row>
                 <Table.Th>Date</Table.Th>
