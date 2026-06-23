@@ -463,8 +463,12 @@ export function useDecideExpense() {
         .then((r) => r.data),
     onSuccess: (row) => {
       qc.invalidateQueries({ queryKey: qkExpenses });
-      const verb = row?.status === "approved" ? "Approved" : "Rejected";
-      toast.success(`${verb}`);
+      const label =
+        row?.status === "approved" ? "Approved"
+        : row?.status === "rejected" ? "Rejected"
+        : row?.status === "onhold" ? "On Hold"
+        : "Updated";
+      toast.success(label);
     },
     onError: (err) => toast.error(err.message || "Failed to decide expense"),
   });
