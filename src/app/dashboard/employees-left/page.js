@@ -63,7 +63,11 @@ export default function EmployeesLeftPage() {
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return employees
-      .filter((e) => e.is_active === false)
+      // Two signals for "this person has left":
+      //   • is_active flag is explicitly false (preferred), OR
+      //   • date_of_leaving is set on the row (legacy fallback for older
+      //     API responses where the is_active field wasn't serialised).
+      .filter((e) => e.is_active === false || !!e.date_of_leaving)
       .filter((e) => deptFilter === "all" || e.department?.slug === deptFilter)
       .filter((e) => orgFilter === "all" || (e.organisation || "") === orgFilter)
       .filter((e) => {
