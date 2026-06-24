@@ -436,9 +436,15 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     organisation: employee?.organisation || "",
     reporting_manager: employee?.reporting_manager || "",
     date_of_joining: employee?.date_of_joining || "",
+    date_of_leaving: employee?.date_of_leaving || "",
     password: "",
     is_active: employee?.is_active !== false,
   }));
+  // Deactivate-checkbox toggle.  When ticked, a Date of Left input appears
+  // and the Save action will flip is_active=false + persist the date.
+  const [deactivateChecked, setDeactivateChecked] = useState(
+    employee?.is_active === false,
+  );
 
   const create = useCreateEmployee();
   const update = useUpdateEmployee();
@@ -454,6 +460,20 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     if (!payload.password) delete payload.password; // only send if HR set one
     if (!payload.date_of_joining) delete payload.date_of_joining;
     if (!payload.last_name) payload.last_name = "";
+    // Apply the deactivate-checkbox state: when ticked, also persist the
+    // Date of Left.  When unticked, leave date_of_leaving alone so the
+    // audit trail survives a reactivation.
+    if (isEdit) {
+      payload.is_active = !deactivateChecked;
+      if (deactivateChecked) {
+        // Default to today if HR ticked the box but didn't pick a date.
+        payload.date_of_leaving = payload.date_of_leaving || todayISO();
+      } else {
+        delete payload.date_of_leaving;
+      }
+    } else {
+      delete payload.date_of_leaving;
+    }
     try {
       if (isEdit) {
         await update.mutateAsync({ id: employee.id, ...payload });
@@ -627,48 +647,66 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
               </p>
             </div>
           )}
+          {/* Deactivate-checkbox UX — only shown on Edit (you can't create
+              a deactivated employee).  Ticking the box reveals the Date of
+              Left input; on Save the row flips to is_active=false and the
+              date persists.  Unticking restores the employee. */}
+          {isEdit && (
+            <div className="sm:col-span-2 rounded-md border border-rose-100 bg-rose-50/40 p-3">
+              <label className="flex items-center gap-2 text-xs text-zinc-700">
+                <input
+                  type="checkbox"
+                  checked={deactivateChecked}
+                  onChange={(e) => {
+                    setDeactivateChecked(e.target.checked);
+                    // Default the Date of Left to today the first time HR
+                    // ticks the box so they don't have to type it.
+                    if (e.target.checked && !form.date_of_leaving) {
+                      up("date_of_leaving", todayISO());
+                    }
+                  }}
+                  className="h-4 w-4 rounded border-rose-300 text-rose-600 focus:ring-rose-500"
+                />
+                <span>
+                  <span className="font-medium text-rose-700">Deactivate</span>
+                  <span className="ml-1 text-[10px] text-zinc-500">
+                    — moves the employee to <span className="font-medium">Employees Left</span>.
+                    They can no longer log in.
+                  </span>
+                </span>
+              </label>
+              {deactivateChecked && (
+                <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className={labelClass}>Date of Left</label>
+                    <input
+                      type="date"
+                      max={todayISO()}
+                      value={form.date_of_leaving || ""}
+                      onChange={(e) => up("date_of_leaving", e.target.value || todayISO())}
+                      className={`mt-1 ${inputClass}`}
+                      required
+                    />
+                    <p className="mt-1 text-[10px] text-zinc-500">
+                      Defaults to today.  Pick a past date if the employee&rsquo;s
+                      last working day was earlier.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
-          <div>
-            {isEdit && (form.is_active === false ? (
-              <button
-                type="button"
-                onClick={handleReactivate}
-                disabled={pending}
-                className="rounded-md border border-emerald-300 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
-              >
-                Reactivate
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleDeactivate}
-                disabled={pending}
-                className="rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-50"
-              >
-                Deactivate
-              </button>
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100">
-              Cancel
-            </button>
-            <button type="submit" disabled={pending} className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60">
-              {pending ? "Saving…" : isEdit ? "Save changes" : "Create employee"}
-            </button>
-          </div>
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-200 bg-zinc-50 px-4 py-3">
+          <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-100">
+            Cancel
+          </button>
+          <button type="submit" disabled={pending} className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60">
+            {pending ? "Saving…" : isEdit ? "Save changes" : "Create employee"}
+          </button>
         </div>
       </form>
-      {deactivateDateOpen && employee && (
-        <DeactivationDateModal
-          employee={employee}
-          submitting={deactivate.isPending}
-          onClose={() => setDeactivateDateOpen(false)}
-          onConfirm={confirmDeactivate}
-        />
-      )}
     </div>
   );
 }
@@ -1047,7 +1085,7 @@ function DeactivationDateModal({ employee, submitting, onClose, onConfirm }) {
             htmlFor="deactivation-date"
             className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-600"
           >
-            Date of Deactivate
+            Date of Left
           </label>
           <input
             id="deactivation-date"
