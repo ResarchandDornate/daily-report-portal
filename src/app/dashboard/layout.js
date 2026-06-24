@@ -37,6 +37,17 @@ export default function DashboardLayout({ children }) {
   // Route guard — non-HR users get bounced from HR-only pages back to /dashboard.
   // The only employee-accessible routes are /dashboard and /dashboard/my-report
   // (plus dept- and role-gated extras like Sales Sheets and Teams).
+  // Named approver accounts (Tarini, Smita) are NOT HR but get extended
+  // access — they can see All Employees, Employees Left, and the employee
+  // profile pages so they can deactivate / reactivate as needed.  Matched
+  // by the local part of the email so `tarini.aggrawal@…` resolves too.
+  const isNamedApprover = (() => {
+    if (!me) return false;
+    const local = (me.email || "").toLowerCase().split("@")[0];
+    return ["tarini", "smita"].some(
+      (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
+    );
+  })();
   useEffect(() => {
     if (!me) return;
     if (me.role === "hr") return;
@@ -50,14 +61,28 @@ export default function DashboardLayout({ children }) {
     if (["insideSales", "salesService"].includes(me.department?.slug)) {
       employeePaths.push("/dashboard/sales-uploads");
     }
+    // Tarini / Smita (named approvers) can also visit the employee-roster
+    // pages so they can deactivate someone after reviewing them.
+    if (isNamedApprover) {
+      employeePaths.push("/dashboard/employees");
+      employeePaths.push("/dashboard/employees-left");
+    }
     // Team heads can access the Teams pages.  /dashboard/teams/<empId>
     // is a dynamic route, so we check the prefix rather than an exact match.
     if (me.is_team_head && (pathname === "/dashboard/teams" || pathname.startsWith("/dashboard/teams/"))) {
       return;
     }
+    // Employee profile pages (dynamic route) — let named approvers + team
+    // heads peek without leaking them open to every employee.
+    if (
+      (isNamedApprover || me.is_team_head)
+      && pathname.startsWith("/dashboard/employee/")
+    ) {
+      return;
+    }
     const isAllowed = employeePaths.includes(pathname);
     if (!isAllowed) router.replace("/dashboard");
-  }, [me, pathname, router]);
+  }, [me, pathname, router, isNamedApprover]);
 
   if (meLoading || !me) {
     return (
@@ -91,8 +116,22 @@ export default function DashboardLayout({ children }) {
       roles: ["employee"],
       requiresTeamHead: true,
     },
-    { href: "/dashboard/employees", label: "All Employees", icon: "users", roles: ["hr"] },
-    { href: "/dashboard/employees-left", label: "Employees Left", icon: "userMinus", roles: ["hr"] },
+    {
+      href: "/dashboard/employees",
+      label: "All Employees",
+      icon: "users",
+      roles: ["hr", "employee"],
+      // Named approvers (Tarini / Smita) get this nav entry too even though
+      // they're not HR — the `requiresApprover` flag is consumed below.
+      requiresApprover: true,
+    },
+    {
+      href: "/dashboard/employees-left",
+      label: "Employees Left",
+      icon: "userMinus",
+      roles: ["hr", "employee"],
+      requiresApprover: true,
+    },
     { href: "/dashboard/reports", label: "All Reports", icon: "table", roles: ["hr"] },
     {
       label: "Departments",
@@ -116,6 +155,9 @@ export default function DashboardLayout({ children }) {
     }
     // Team-head-gated items: hide unless me.is_team_head is true.
     if (n.requiresTeamHead && !me.is_team_head) return false;
+    // Approver-gated items: HR always sees them; non-HR only when they're
+    // a named approver (Tarini / Smita).
+    if (n.requiresApprover && me.role !== "hr" && !isNamedApprover) return false;
     return true;
   });
   const meName = fullName(me);

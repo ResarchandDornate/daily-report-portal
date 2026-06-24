@@ -9,6 +9,7 @@ import {
   useDeleteExpense,
   useExpenses,
   useMe,
+  useUpdateExpense,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -99,12 +100,15 @@ export default function ExpensePage() {
   const createExpense = useCreateExpense();
   const decideExpense = useDecideExpense();
   const deleteExpense = useDeleteExpense();
+  const updateExpense = useUpdateExpense();
 
   // Two-tier modal state for the admin view: first a list of all expenses
   // for one employee, then a per-expense detail modal opened from that list.
   // Employee view skips the employee modal and goes straight to detail.
   const [empModal, setEmpModal] = useState(null);   // { userId, userName, expenses[] } | null
   const [openModal, setOpenModal] = useState(null); // single expense row | null
+  // Edit modal — only used by employees on their own pending/onhold rows.
+  const [editingRow, setEditingRow] = useState(null);
 
   // Total amount across all currently-visible expenses (admin sees company-
   // wide total; employees see their own grand total).  Formatted in Indian
@@ -184,6 +188,7 @@ export default function ExpensePage() {
           isLoading={isLoading}
           isAdmin={isAdmin}
           onOpen={(row) => setOpenModal(row)}
+          onEdit={(row) => setEditingRow(row)}
         />
       )}
 
@@ -193,6 +198,21 @@ export default function ExpensePage() {
           group={empModal}
           onClose={() => setEmpModal(null)}
           onOpenExpense={(row) => setOpenModal(row)}
+        />
+      )}
+
+      {/* Employee's edit modal — only mounted for their own pending/onhold rows. */}
+      {editingRow && (
+        <EditExpenseModal
+          row={editingRow}
+          onClose={() => setEditingRow(null)}
+          onSave={async (patch) => {
+            try {
+              await updateExpense.mutateAsync({ id: editingRow.id, ...patch });
+              setEditingRow(null);
+            } catch {}
+          }}
+          saving={updateExpense.isPending}
         />
       )}
 
@@ -863,7 +883,175 @@ function BillCountIndicator({ withBills, total }) {
   );
 }
 
-function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
+function EditExpenseModal({ row, onClose, onSave, saving }) {
+  // Pre-fill from the existing expense — every field stays editable so an
+  // employee can correct any mistake before approval.  Bills are NOT shown
+  // here (they're managed through the new-expense submit + the per-expense
+  // detail view).  Travel km/rate auto-calc is intentionally omitted on edit
+  // — the employee can just type the new amount.
+  const [date, setDate] = useState(row.date || todayISO());
+  const [mode, setMode] = useState((row.mode || "cash").toLowerCase());
+  const [expenseType, setExpenseType] = useState(row.expense_type || "food");
+  // travelType in the edit form is either one of the new top-level travel
+  // values (car/bike/cab/rapido) OR the raw sub-mode (bus/auto/metro).  We
+  // store whatever the server has so it round-trips cleanly.
+  const [travelType, setTravelType] = useState(row.travel_type || "");
+  const [amount, setAmount] = useState(String(row.amount ?? 0));
+  const [remarks, setRemarks] = useState(row.remarks || "");
+
+  useEffect(() => {
+    if (expenseType !== "travel" && travelType) setTravelType("");
+  }, [expenseType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handleSave(e) {
+    e.preventDefault();
+    const amt = parseInt(amount, 10);
+    if (!Number.isFinite(amt) || amt < 0) {
+      toast.error("Amount must be a non-negative number.");
+      return;
+    }
+    if (expenseType === "travel" && !travelType) {
+      toast.error("Pick a travel type before saving.");
+      return;
+    }
+    onSave({
+      date,
+      mode,
+      expense_type: expenseType,
+      travel_type: expenseType === "travel" ? travelType : "",
+      amount: amt,
+      remarks: remarks.trim(),
+    });
+  }
+
+  // Show every travel type we accept (including the bus/auto/metro sub-modes
+  // that previously sat under "Others") so the existing value can round-trip.
+  const ALL_TRAVEL_OPTIONS = [
+    ...TRAVEL_TYPES.filter((t) => t.value !== "other"),
+    ...TRAVEL_SUBTYPES,
+  ];
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSave}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+      >
+        <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">Edit expense</h3>
+            <p className="text-[11px] text-zinc-500">
+              Submitted on {formatPretty(row.date)} · ₹{(row.amount || 0).toLocaleString("en-IN")}
+              {row.status === "onhold" && (
+                <span className="ml-2 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-800">
+                  On Hold — saving will resubmit for approval
+                </span>
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1 text-zinc-500 hover:bg-white hover:text-zinc-800"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="grid max-h-[60vh] grid-cols-1 gap-3 overflow-y-auto p-4 sm:grid-cols-2">
+          <Field label="Date">
+            <input
+              type="date"
+              value={date}
+              max={todayISO()}
+              onChange={(e) => setDate(e.target.value || todayISO())}
+              className={inputClass}
+              required
+            />
+          </Field>
+          <Field label="Payment Mode">
+            <select value={mode} onChange={(e) => setMode(e.target.value)} className={inputClass}>
+              {MODES.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Expense Type">
+            <select
+              value={expenseType}
+              onChange={(e) => setExpenseType(e.target.value)}
+              className={inputClass}
+              required
+            >
+              {EXPENSE_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </Field>
+          {expenseType === "travel" && (
+            <Field label="Travel Type">
+              <select
+                value={travelType}
+                onChange={(e) => setTravelType(e.target.value)}
+                className={inputClass}
+                required
+              >
+                <option value="">Select…</option>
+                {ALL_TRAVEL_OPTIONS.map((t) => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+          <Field label="Amount (₹)">
+            <input
+              type="number"
+              min={0}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className={inputClass}
+              required
+            />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Remarks">
+              <textarea
+                value={remarks}
+                onChange={(e) => setRemarks(e.target.value)}
+                rows={3}
+                className={`${inputClass} resize-y`}
+              />
+            </Field>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-100 bg-stone-50 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={saving}
+            className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
   return (
     <Table maxHeight={520}>
       <Table.Head>
@@ -876,7 +1064,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
           <Table.Th>Status</Table.Th>
           <Table.Th>Bill</Table.Th>
           <Table.Th>Remarks</Table.Th>
-          <Table.Th />
+          <Table.Th className="text-right">{isAdmin ? "" : "Action"}</Table.Th>
         </Table.Row>
       </Table.Head>
       <Table.Body>
@@ -891,8 +1079,11 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
           rows.map((r) => (
             <Table.Row
               key={r.id}
-              onClick={() => onOpen(r)}
-              className="cursor-pointer hover:bg-zinc-50"
+              // Employee: row click does nothing (no "Open" detail flow);
+              // they must use the Edit button.  Admin: row click still opens
+              // the per-expense detail modal.
+              onClick={isAdmin ? () => onOpen(r) : undefined}
+              className={isAdmin ? "cursor-pointer hover:bg-zinc-50" : "hover:bg-zinc-50/50"}
             >
               <Table.Td className="whitespace-nowrap">{formatPretty(r.date)}</Table.Td>
               {isAdmin && (
@@ -923,9 +1114,31 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen }) {
                 {r.remarks || "—"}
               </Table.Td>
               <Table.Td className="text-right">
-                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600">
-                  Open →
-                </span>
+                {isAdmin ? (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600">
+                    Open →
+                  </span>
+                ) : (
+                  // Edit is only enabled while the expense is still in
+                  // pending / on-hold state.  After approval/rejection the
+                  // row is locked — show a muted "Locked" label instead.
+                  (r.status === "pending" || r.status === "onhold") ? (
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); onEdit(r); }}
+                      className="rounded-md border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-100"
+                    >
+                      Edit
+                    </button>
+                  ) : (
+                    <span
+                      className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-500"
+                      title="Approved / rejected expenses can't be edited"
+                    >
+                      Locked
+                    </span>
+                  )
+                )}
               </Table.Td>
             </Table.Row>
           ))

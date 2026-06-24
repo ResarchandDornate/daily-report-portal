@@ -2,13 +2,15 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { formatPrettyWithDay, fullName } from "@/lib/data";
+import { formatPretty, formatPrettyWithDay, fullName } from "@/lib/data";
 import {
   useDepartments,
   useEmployees,
+  useExpenses,
   useMe,
   useOrganisations,
   useReactivateEmployee,
+  useReports,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -25,6 +27,38 @@ export default function EmployeesLeftPage() {
   const { data: departments = [] } = useDepartments();
   const { data: organisations = [] } = useOrganisations();
   const reactivate = useReactivateEmployee();
+
+  // Per-employee data for the inline expand panel.  We pull ALL reports +
+  // expenses once and slice them per-employee in JS — cheaper than a fetch
+  // per click and fast enough for company-scale data.
+  const { data: allReports = [] } = useReports();
+  const { data: allExpenses = [] } = useExpenses();
+  const reportsByUser = useMemo(() => {
+    const m = new Map();
+    for (const r of allReports) {
+      if (!m.has(r.user_id)) m.set(r.user_id, []);
+      m.get(r.user_id).push(r);
+    }
+    for (const arr of m.values()) {
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    }
+    return m;
+  }, [allReports]);
+  const expensesByUser = useMemo(() => {
+    const m = new Map();
+    for (const e of allExpenses) {
+      if (!m.has(e.user_id)) m.set(e.user_id, []);
+      m.get(e.user_id).push(e);
+    }
+    for (const arr of m.values()) {
+      arr.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    }
+    return m;
+  }, [allExpenses]);
+
+  // Which row is currently expanded.  null = none; same row clicked twice
+  // collapses.
+  const [expandedId, setExpandedId] = useState(null);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -127,16 +161,17 @@ export default function EmployeesLeftPage() {
             <Table.Th>Department</Table.Th>
             <Table.Th>Reporting Manager</Table.Th>
             <Table.Th>Date of Joining</Table.Th>
+            <Table.Th>Date of Leaving</Table.Th>
             <Table.Th className="whitespace-nowrap text-center">Status</Table.Th>
             <Table.Th />
           </Table.Row>
         </Table.Head>
         <Table.Body>
           {isLoading ? (
-            <Table.Empty colSpan={8} message="Loading employees…" />
+            <Table.Empty colSpan={9} message="Loading employees…" />
           ) : filtered.length === 0 ? (
             <Table.Empty
-              colSpan={8}
+              colSpan={9}
               message={
                 query || deptFilter !== "all" || orgFilter !== "all"
                   ? "No employees match the current filters."
@@ -144,10 +179,18 @@ export default function EmployeesLeftPage() {
               }
             />
           ) : (
-            filtered.map((emp, i) => {
+            filtered.flatMap((emp, i) => {
               const dept = emp.department;
-              return (
-                <Table.Row key={emp.id}>
+              const isOpen = expandedId === emp.id;
+              const empReports = reportsByUser.get(emp.id) || [];
+              const empExpenses = expensesByUser.get(emp.id) || [];
+
+              const summaryRow = (
+                <Table.Row
+                  key={emp.id}
+                  onClick={() => setExpandedId(isOpen ? null : emp.id)}
+                  className={`cursor-pointer ${isOpen ? "bg-rose-50/30" : "hover:bg-zinc-50"}`}
+                >
                   <Table.Td className="align-top text-zinc-700">
                     {emp.organisation || "—"}
                   </Table.Td>
@@ -155,15 +198,14 @@ export default function EmployeesLeftPage() {
                     {i + 1}
                   </Table.Td>
                   <Table.Td className="align-top">
-                    <Link
-                      href={`/dashboard/employee/${emp.id}`}
-                      className="flex items-center gap-2 text-zinc-900"
-                    >
+                    <div className="flex items-center gap-2 text-zinc-900">
                       <Avatar name={fullName(emp)} />
-                      <span className="text-[13px] font-medium hover:text-orange-700">
-                        {fullName(emp)}
-                      </span>
-                    </Link>
+                      <span className="text-[13px] font-medium">{fullName(emp)}</span>
+                    </div>
+                    <div className="mt-0.5 text-[10px] text-zinc-500">
+                      {empReports.length} report{empReports.length === 1 ? "" : "s"} ·
+                      {" "}{empExpenses.length} expense{empExpenses.length === 1 ? "" : "s"}
+                    </div>
                   </Table.Td>
                   <Table.Td className="align-top">
                     {dept ? (
@@ -187,6 +229,15 @@ export default function EmployeesLeftPage() {
                       ? formatPrettyWithDay(emp.date_of_joining)
                       : "—"}
                   </Table.Td>
+                  <Table.Td className="align-top text-zinc-700">
+                    {emp.date_of_leaving ? (
+                      <span className="font-medium text-rose-700">
+                        {formatPrettyWithDay(emp.date_of_leaving)}
+                      </span>
+                    ) : (
+                      <span className="text-zinc-400">—</span>
+                    )}
+                  </Table.Td>
                   <Table.Td className="align-top text-center">
                     <span className="inline-flex items-center rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
                       Left
@@ -196,7 +247,7 @@ export default function EmployeesLeftPage() {
                     {isHR && (
                       <button
                         type="button"
-                        onClick={() => reactivate.mutate(emp.id)}
+                        onClick={(e) => { e.stopPropagation(); reactivate.mutate(emp.id); }}
                         disabled={reactivate.isPending}
                         className="text-[12px] font-medium text-orange-600 hover:text-orange-800 disabled:opacity-50"
                       >
@@ -206,11 +257,141 @@ export default function EmployeesLeftPage() {
                   </Table.Td>
                 </Table.Row>
               );
+
+              if (!isOpen) return [summaryRow];
+              return [
+                summaryRow,
+                <Table.Row key={`${emp.id}-data`}>
+                  <Table.Td colSpan={9} className="bg-rose-50/30 p-0">
+                    <LeftEmployeeDataPanel
+                      reports={empReports}
+                      expenses={empExpenses}
+                      profileHref={`/dashboard/employee/${emp.id}`}
+                    />
+                  </Table.Td>
+                </Table.Row>,
+              ];
             })
           )}
         </Table.Body>
       </Table>
     </div>
+  );
+}
+
+function LeftEmployeeDataPanel({ reports, expenses, profileHref }) {
+  // Show the 10 most-recent of each, with totals at the top.  Anything more
+  // detailed lives on the full employee profile page (deep-link below).
+  const recentReports = reports.slice(0, 10);
+  const recentExpenses = expenses.slice(0, 10);
+  const totalExpenseAmount = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+
+  return (
+    <div className="border-t border-rose-100 px-4 py-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+          Historical data
+        </p>
+        <Link
+          href={profileHref}
+          className="text-[11px] font-medium text-orange-600 hover:text-orange-800"
+        >
+          Open full profile →
+        </Link>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Reports column */}
+        <div className="rounded-md border border-zinc-200 bg-white">
+          <div className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-700">
+              Daily Reports
+            </p>
+            <span className="text-[10px] text-zinc-500">
+              {reports.length} total
+              {recentReports.length < reports.length && (
+                <span> · showing {recentReports.length}</span>
+              )}
+            </span>
+          </div>
+          {recentReports.length === 0 ? (
+            <p className="px-3 py-3 text-[11px] text-zinc-400">No reports filed.</p>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {recentReports.map((r) => (
+                <li key={r.id} className="px-3 py-1.5 text-[11px] text-zinc-700">
+                  <span className="font-medium text-zinc-900">
+                    {formatPretty(r.date)}
+                  </span>
+                  {r.data?.__leave__ === "1" && (
+                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
+                      On leave
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Expenses column */}
+        <div className="rounded-md border border-zinc-200 bg-white">
+          <div className="flex items-center justify-between border-b border-zinc-100 bg-zinc-50 px-3 py-2">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-700">
+              Expense Claims
+            </p>
+            <span className="text-[10px] text-zinc-500">
+              {expenses.length} total · ₹{totalExpenseAmount.toLocaleString("en-IN")}
+            </span>
+          </div>
+          {recentExpenses.length === 0 ? (
+            <p className="px-3 py-3 text-[11px] text-zinc-400">No expense claims submitted.</p>
+          ) : (
+            <ul className="divide-y divide-zinc-100">
+              {recentExpenses.map((e) => (
+                <li
+                  key={e.id}
+                  className="flex items-center justify-between gap-2 px-3 py-1.5 text-[11px]"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="font-medium text-zinc-900">
+                      {formatPretty(e.date)}
+                    </span>
+                    <span className="capitalize text-zinc-600">
+                      {e.expense_type}
+                      {e.travel_type && ` · ${e.travel_type}`}
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-2 tabular-nums">
+                    <span className="font-semibold text-zinc-900">
+                      ₹{(e.amount || 0).toLocaleString("en-IN")}
+                    </span>
+                    <ExpenseStatusBadge status={e.status} />
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ExpenseStatusBadge({ status }) {
+  const cls =
+    status === "approved" ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    : status === "rejected" ? "bg-rose-50 text-rose-700 ring-rose-200"
+    : status === "onhold"   ? "bg-sky-50 text-sky-700 ring-sky-200"
+    : "bg-amber-50 text-amber-800 ring-amber-200";
+  const label = status === "approved" ? "Approved"
+    : status === "rejected" ? "Rejected"
+    : status === "onhold"   ? "On Hold"
+    : "Pending";
+  return (
+    <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-semibold ring-1 ${cls}`}>
+      {label}
+    </span>
   );
 }
 
