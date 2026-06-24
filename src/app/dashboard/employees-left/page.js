@@ -161,7 +161,7 @@ export default function EmployeesLeftPage() {
             <Table.Th>Department</Table.Th>
             <Table.Th>Reporting Manager</Table.Th>
             <Table.Th>Date of Joining</Table.Th>
-            <Table.Th>Date of Leaving</Table.Th>
+            <Table.Th>Date of Deactivate</Table.Th>
             <Table.Th className="whitespace-nowrap text-center">Status</Table.Th>
             <Table.Th />
           </Table.Row>
