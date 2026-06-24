@@ -270,6 +270,7 @@ export default function EmployeesLeftPage() {
                     <LeftEmployeeDataPanel
                       reports={empReports}
                       expenses={empExpenses}
+                      department={emp.department}
                       profileHref={`/dashboard/employee/${emp.id}`}
                     />
                   </Table.Td>
@@ -283,12 +284,22 @@ export default function EmployeesLeftPage() {
   );
 }
 
-function LeftEmployeeDataPanel({ reports, expenses, profileHref }) {
+function LeftEmployeeDataPanel({ reports, expenses, department, profileHref }) {
   // Show the 10 most-recent of each, with totals at the top.  Anything more
   // detailed lives on the full employee profile page (deep-link below).
   const recentReports = reports.slice(0, 10);
   const recentExpenses = expenses.slice(0, 10);
   const totalExpenseAmount = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+
+  // Map field key → human label using the employee's department schema
+  // so the report content reads "Site Name: Noida" instead of "site_name: Noida".
+  const fieldLabels = useMemo(() => {
+    const m = {};
+    for (const f of (department?.report_fields || [])) {
+      if (f?.key) m[f.key] = f.label || f.key;
+    }
+    return m;
+  }, [department]);
 
   return (
     <div className="border-t border-rose-100 px-4 py-4">
@@ -321,19 +332,47 @@ function LeftEmployeeDataPanel({ reports, expenses, profileHref }) {
           {recentReports.length === 0 ? (
             <p className="px-3 py-3 text-[11px] text-zinc-400">No reports filed.</p>
           ) : (
-            <ul className="divide-y divide-zinc-100">
-              {recentReports.map((r) => (
-                <li key={r.id} className="px-3 py-1.5 text-[11px] text-zinc-700">
-                  <span className="font-medium text-zinc-900">
-                    {formatPretty(r.date)}
-                  </span>
-                  {r.data?.__leave__ === "1" && (
-                    <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
-                      On leave
-                    </span>
-                  )}
-                </li>
-              ))}
+            <ul className="max-h-80 divide-y divide-zinc-100 overflow-y-auto">
+              {recentReports.map((r) => {
+                const isLeave = r.data?.__leave__ === "1";
+                // Pull every non-internal report field that has real content
+                // — strip the `__leave__` marker and any blank values.
+                const entries = Object.entries(r.data || {})
+                  .filter(([k, v]) => !k.startsWith("__") && v != null && String(v).trim() !== "");
+                return (
+                  <li key={r.id} className="px-3 py-2 text-[11px]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-zinc-900">
+                        {formatPretty(r.date)}
+                      </span>
+                      {isLeave && (
+                        <span className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800">
+                          On leave
+                        </span>
+                      )}
+                    </div>
+                    {!isLeave && entries.length > 0 && (
+                      <dl className="mt-1 space-y-0.5">
+                        {entries.map(([k, v]) => (
+                          <div key={k} className="text-[11px] leading-snug">
+                            <dt className="inline font-medium text-zinc-600">
+                              {fieldLabels[k] || k}:
+                            </dt>{" "}
+                            <dd className="inline whitespace-pre-wrap text-zinc-800">
+                              {String(v)}
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    )}
+                    {!isLeave && entries.length === 0 && (
+                      <p className="mt-0.5 text-[10px] italic text-zinc-400">
+                        (Submitted with no field values.)
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
