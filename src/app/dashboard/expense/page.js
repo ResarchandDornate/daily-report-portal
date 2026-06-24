@@ -889,7 +889,13 @@ function BillThumbnail({ expense, onOpen }) {
   return (
     <button
       type="button"
-      onClick={() => url && onOpen(url, firstName)}
+      onClick={(e) => {
+        // Don't bubble up to the parent Table.Row's onClick — for the
+        // admin flat-table that would open the per-expense detail modal
+        // unintentionally.
+        e.stopPropagation();
+        if (url) onOpen(url, firstName);
+      }}
       disabled={!url}
       title={`${billCount} bill${billCount === 1 ? "" : "s"} — click to enlarge`}
       className="group relative h-9 w-9 overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 transition hover:border-orange-300 hover:bg-orange-50 disabled:cursor-default"
@@ -1168,7 +1174,10 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
 }
 
 function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
+  // Full-screen image preview state for the inline bill thumbnails.
+  const [preview, setPreview] = useState(null);
   return (
+    <>
     <Table maxHeight={520}>
       <Table.Head>
         <Table.Row>
@@ -1224,7 +1233,10 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
                 <StatusPill status={r.status} />
               </Table.Td>
               <Table.Td>
-                <BillIndicator count={(r.bills || []).length} />
+                <BillThumbnail
+                  expense={r}
+                  onOpen={(url, filename) => setPreview({ url, filename })}
+                />
               </Table.Td>
               <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
                 {r.remarks || "—"}
@@ -1261,6 +1273,14 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
         )}
       </Table.Body>
     </Table>
+    {preview && (
+      <BillPreviewOverlay
+        url={preview.url}
+        filename={preview.filename}
+        onClose={() => setPreview(null)}
+      />
+    )}
+    </>
   );
 }
 
