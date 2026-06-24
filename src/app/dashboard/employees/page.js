@@ -83,25 +83,28 @@ export default function AllEmployeesPage() {
 
   // "This month" attendance — fetch reports for the current calendar month
   // (1st → end of month) and count distinct weekdays each employee filed on.
-  // Denominator is the total Mon-Fri count for the whole calendar month
-  // (not capped at today) so the cell shows e.g. "5 / 22 (Jun)".
+  // Denominator is the Mon-Fri count from 1st-of-month → TODAY (elapsed
+  // working days), so the cell reads "0 / 16" on the 24th instead of
+  // "0 / 22" — a non-filer can't hide behind days that haven't happened.
   const monthInfo = useMemo(() => {
     const now = new Date();
     const y = now.getFullYear();
     const m = now.getMonth(); // 0-indexed
+    const today = now.getDate();
     const first = new Date(y, m, 1);
     const last = new Date(y, m + 1, 0); // last day of current month
     const iso = (d) =>
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    let workdays = 0;
-    for (let d = 1; d <= last.getDate(); d += 1) {
+    // Elapsed Mon-Fri days from 1st through today (inclusive).
+    let workdaysElapsed = 0;
+    for (let d = 1; d <= today; d += 1) {
       const dow = new Date(y, m, d).getDay();
-      if (dow !== 0 && dow !== 6) workdays += 1;
+      if (dow !== 0 && dow !== 6) workdaysElapsed += 1;
     }
     return {
       start: iso(first),
       end: iso(last),
-      workdays,
+      workdays: workdaysElapsed,
       label: first.toLocaleString(undefined, { month: "short" }),
     };
   }, []);
