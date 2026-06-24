@@ -192,12 +192,12 @@ export default function ExpensePage() {
         />
       )}
 
-      {/* Admin: per-employee modal listing every expense. */}
+      {/* Admin: per-employee modal listing every expense inline (with
+          clickable bill thumbnails — no separate "Open" detail step). */}
       {empModal && (
         <EmployeeExpensesModal
           group={empModal}
           onClose={() => setEmpModal(null)}
-          onOpenExpense={(row) => setOpenModal(row)}
         />
       )}
 
@@ -735,7 +735,10 @@ function StatusMix({ pending, approved, rejected, onHold }) {
   );
 }
 
-function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
+function EmployeeExpensesModal({ group, onClose }) {
+  // Full-screen image preview state — set to { url, filename } when a bill
+  // thumbnail is clicked.  Click anywhere outside the image to close.
+  const [preview, setPreview] = useState(null);
   if (!group) return null;
   return (
     <div
@@ -779,16 +782,11 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
                 <Table.Th>Status</Table.Th>
                 <Table.Th>Bill</Table.Th>
                 <Table.Th>Remarks</Table.Th>
-                <Table.Th />
               </Table.Row>
             </Table.Head>
             <Table.Body>
               {group.expenses.map((r) => (
-                <Table.Row
-                  key={r.id}
-                  onClick={() => onOpenExpense(r)}
-                  className="cursor-pointer hover:bg-zinc-50"
-                >
+                <Table.Row key={r.id}>
                   <Table.Td className="whitespace-nowrap">{formatPretty(r.date)}</Table.Td>
                   <Table.Td>
                     <span className="capitalize">{r.expense_type}</span>
@@ -804,21 +802,139 @@ function EmployeeExpensesModal({ group, onClose, onOpenExpense }) {
                     <StatusPill status={r.status} />
                   </Table.Td>
                   <Table.Td>
-                    <BillIndicator count={(r.bills || []).length} />
+                    <BillThumbnail
+                      expense={r}
+                      onOpen={(url, filename) => setPreview({ url, filename })}
+                    />
                   </Table.Td>
-                  <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
+                  <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
                     {r.remarks || "—"}
-                  </Table.Td>
-                  <Table.Td className="text-right">
-                    <span className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600">
-                      Open →
-                    </span>
                   </Table.Td>
                 </Table.Row>
               ))}
+              {/* Subtotal row — sums the Amount column. */}
+              <Table.Row className="bg-orange-50/60 font-semibold">
+                <Table.Td className="text-zinc-900" colSpan={3}>
+                  Subtotal · {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"}
+                </Table.Td>
+                <Table.Td className="text-right tabular-nums text-zinc-900">
+                  ₹{(group.total || 0).toLocaleString("en-IN")}
+                </Table.Td>
+                <Table.Td colSpan={3} />
+              </Table.Row>
             </Table.Body>
           </Table>
         </div>
+      </div>
+      {preview && (
+        <BillPreviewOverlay
+          url={preview.url}
+          filename={preview.filename}
+          onClose={() => setPreview(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function BillThumbnail({ expense, onOpen }) {
+  // Renders a small (32px) image preview of the FIRST attached bill.
+  // The bytes are fetched once on mount and cached as a blob URL.  Clicking
+  // the thumbnail surfaces the full-screen image to the parent via
+  // `onOpen(url, filename)`.  PDFs fall back to a generic 📄 tile.
+  const [url, setUrl] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const bills = expense.bills || [];
+  const billCount = bills.length;
+  const firstName = bills[0]?.filename || "";
+  const isImage = /\.(jpe?g|png|webp|heic)$/i.test(firstName);
+  const isPdf = /\.pdf$/i.test(firstName);
+
+  useEffect(() => {
+    if (!billCount || !isImage) return;
+    let cancelled = false;
+    let createdUrl = null;
+    (async () => {
+      try {
+        const { api } = await import("@/lib/api");
+        const resp = await api.get(`/api/expenses/${expense.id}/bill/0`, {
+          responseType: "blob",
+        });
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(resp.data);
+        setUrl(createdUrl);
+      } catch {
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [expense.id, billCount, isImage]);
+
+  if (!billCount) {
+    return (
+      <span
+        className="inline-flex items-center justify-center rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-600 ring-1 ring-rose-200"
+        title="No bill attached"
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
+          <path d="M4.7 4.7a1 1 0 0 1 1.4 0L10 8.6l3.9-3.9a1 1 0 1 1 1.4 1.4L11.4 10l3.9 3.9a1 1 0 0 1-1.4 1.4L10 11.4l-3.9 3.9a1 1 0 1 1-1.4-1.4L8.6 10 4.7 6.1a1 1 0 0 1 0-1.4Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => url && onOpen(url, firstName)}
+      disabled={!url}
+      title={`${billCount} bill${billCount === 1 ? "" : "s"} — click to enlarge`}
+      className="group relative h-9 w-9 overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 transition hover:border-orange-300 hover:bg-orange-50 disabled:cursor-default"
+    >
+      {url && isImage ? (
+        <img src={url} alt="" className="h-full w-full object-cover" />
+      ) : isPdf ? (
+        <span className="flex h-full w-full items-center justify-center text-base">📄</span>
+      ) : loadError ? (
+        <span className="flex h-full w-full items-center justify-center text-base">📎</span>
+      ) : (
+        <span className="block h-full w-full animate-pulse bg-zinc-200" />
+      )}
+      {billCount > 1 && (
+        <span className="absolute -right-0.5 -top-0.5 inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-orange-600 px-0.5 text-[8px] font-bold text-white">
+          {billCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function BillPreviewOverlay({ url, filename, onClose }) {
+  const isPdf = /\.pdf$/i.test(filename || "");
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="relative max-h-[90vh] max-w-5xl overflow-hidden rounded-lg bg-white"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-2 top-2 z-10 rounded-md bg-zinc-900/60 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-900/80"
+        >
+          Close
+        </button>
+        {isPdf ? (
+          <iframe src={url} className="h-[80vh] w-[80vw]" title="Bill" />
+        ) : (
+          <img src={url} alt={filename || "Bill"} className="max-h-[85vh] max-w-[90vw] object-contain" />
+        )}
       </div>
     </div>
   );
