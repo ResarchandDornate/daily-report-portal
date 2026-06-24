@@ -1047,7 +1047,7 @@ function DeactivationDateModal({ employee, submitting, onClose, onConfirm }) {
             htmlFor="deactivation-date"
             className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-600"
           >
-            Date of Leaving
+            Date of Deactivate
           </label>
           <input
             id="deactivation-date"
