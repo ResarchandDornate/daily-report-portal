@@ -282,8 +282,16 @@ export function useUpdateEmployee() {
 export function useDeactivateEmployee() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id) =>
-      api.patch(`/api/employees/${id}`, { is_active: false }).then((r) => r.data),
+    // Accepts either a plain `id` (legacy callers) or an object
+    // `{ id, date_of_leaving }` to record when the employee's tenure ended.
+    mutationFn: (arg) => {
+      const id = typeof arg === "object" && arg !== null ? arg.id : arg;
+      const body = { is_active: false };
+      if (typeof arg === "object" && arg !== null && arg.date_of_leaving) {
+        body.date_of_leaving = arg.date_of_leaving;
+      }
+      return api.patch(`/api/employees/${id}`, body).then((r) => r.data);
+    },
     onSuccess: (u) => {
       _invalidateRoster(qc);
       toast.success(`Employee "${fullName(u)}" deactivated`);
@@ -483,5 +491,18 @@ export function useDeleteExpense() {
       toast.success("Expense deleted");
     },
     onError: (err) => toast.error(err.message || "Failed to delete expense"),
+  });
+}
+
+export function useUpdateExpense() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...patch }) =>
+      api.patch(`/api/expenses/${id}`, patch).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Expense updated");
+    },
+    onError: (err) => toast.error(err.message || "Failed to update expense"),
   });
 }

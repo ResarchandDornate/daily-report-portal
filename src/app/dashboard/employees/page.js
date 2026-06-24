@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { formatPrettyWithDay, fullName, getWeekRange } from "@/lib/data";
+import { formatPrettyWithDay, fullName, getWeekRange, todayISO } from "@/lib/data";
 import {
   useCreateDepartment,
   useCreateEmployee,
@@ -31,6 +31,23 @@ export default function AllEmployeesPage() {
 
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
+  // Tarini / Smita aren't HR but can deactivate / reactivate employees.
+  const isNamedApprover = (() => {
+    if (!me) return false;
+    const local = (me.email || "").toLowerCase().split("@")[0];
+    return ["tarini", "smita"].some(
+      (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
+    );
+  })();
+  const canToggleActivation = isHR || isNamedApprover;
+  // Used by the inline Deactivate / Reactivate buttons for non-HR approvers
+  // (HR uses the same actions from inside the Edit modal).
+  const deactivateRow = useDeactivateEmployee();
+  const reactivateRow = useReactivateEmployee();
+  // When set, opens the date-picker modal for that employee.  Used by the
+  // row-level Deactivate button so we capture the date of leaving before
+  // hitting the API.
+  const [pendingDeactivate, setPendingDeactivate] = useState(null);
   const { data: employees = [], isLoading } = useEmployees({ include_inactive: showInactive });
   const { data: departments = [] } = useDepartments();
   const { data: organisations = [] } = useOrganisations();
@@ -313,6 +330,30 @@ export default function AllEmployeesPage() {
                           Edit
                         </button>
                       )}
+                      {/* Inline Deactivate / Reactivate for named approvers
+                          (Tarini, Smita).  HR uses the same actions from
+                          inside the Edit modal so we don't double up. */}
+                      {canToggleActivation && !isHR && (
+                        emp.is_active === false ? (
+                          <button
+                            type="button"
+                            disabled={reactivateRow.isPending}
+                            onClick={() => reactivateRow.mutate(emp.id)}
+                            className="rounded-md border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
+                          >
+                            Reactivate
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={deactivateRow.isPending}
+                            onClick={() => setPendingDeactivate(emp)}
+                            className="rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                          >
+                            Deactivate
+                          </button>
+                        )
+                      )}
                       <Link
                         href={`/dashboard/employee/${emp.id}`}
                         className="inline-flex items-center gap-1 text-[11px] font-medium text-orange-600 hover:text-orange-700"
@@ -350,6 +391,23 @@ export default function AllEmployeesPage() {
           organisations={organisations}
           employees={employees}
           onClose={() => setOrgModalOpen(false)}
+        />
+      )}
+
+      {pendingDeactivate && (
+        <DeactivationDateModal
+          employee={pendingDeactivate}
+          submitting={deactivateRow.isPending}
+          onClose={() => setPendingDeactivate(null)}
+          onConfirm={async (date_of_leaving) => {
+            try {
+              await deactivateRow.mutateAsync({
+                id: pendingDeactivate.id,
+                date_of_leaving,
+              });
+              setPendingDeactivate(null);
+            } catch {}
+          }}
         />
       )}
     </div>
@@ -409,11 +467,18 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     }
   }
 
-  async function handleDeactivate() {
+  // HR's "Deactivate" button now opens a small date-picker modal so the
+  // employee's last working day is captured alongside is_active=false.
+  const [deactivateDateOpen, setDeactivateDateOpen] = useState(false);
+  function handleDeactivate() {
     if (!employee) return;
-    if (!confirm(`Deactivate ${fullName(employee)}? They won't be able to log in.`)) return;
+    setDeactivateDateOpen(true);
+  }
+  async function confirmDeactivate(date_of_leaving) {
+    if (!employee) return;
     try {
-      await deactivate.mutateAsync(employee.id);
+      await deactivate.mutateAsync({ id: employee.id, date_of_leaving });
+      setDeactivateDateOpen(false);
       onClose();
     } catch {}
   }
@@ -596,6 +661,14 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
           </div>
         </div>
       </form>
+      {deactivateDateOpen && employee && (
+        <DeactivationDateModal
+          employee={employee}
+          submitting={deactivate.isPending}
+          onClose={() => setDeactivateDateOpen(false)}
+          onConfirm={confirmDeactivate}
+        />
+      )}
     </div>
   );
 }
@@ -936,6 +1009,79 @@ function MonthBadge({ count, total, label }) {
       </span>
       <span>{count} / {total}</span>
     </span>
+  );
+}
+
+function DeactivationDateModal({ employee, submitting, onClose, onConfirm }) {
+  // Captures the employee's last working day before flipping is_active=false.
+  // Defaults to today, max=today so HR can't accidentally pick the future.
+  const [date, setDate] = useState(todayISO());
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!date) return;
+    onConfirm(date);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+      >
+        <div className="border-b border-zinc-100 bg-rose-50 px-4 py-3">
+          <h3 className="text-sm font-semibold text-zinc-900">
+            Deactivate {fullName(employee)}?
+          </h3>
+          <p className="mt-0.5 text-[11px] text-zinc-600">
+            They will move to <span className="font-medium">Employees Left</span>{" "}
+            and will not be able to log in.
+          </p>
+        </div>
+        <div className="space-y-2 px-4 py-3">
+          <label
+            htmlFor="deactivation-date"
+            className="block text-[10px] font-semibold uppercase tracking-wide text-zinc-600"
+          >
+            Date of Leaving
+          </label>
+          <input
+            id="deactivation-date"
+            type="date"
+            value={date}
+            max={todayISO()}
+            onChange={(e) => setDate(e.target.value || todayISO())}
+            className={inputClass}
+            required
+            autoFocus
+          />
+          <p className="text-[10px] text-zinc-500">
+            Defaults to today.  Pick a past date if the employee's last day was
+            earlier (recorded on their profile).
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-100 bg-stone-50 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+          >
+            {submitting ? "Deactivating…" : "Deactivate"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
