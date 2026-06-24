@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { formatPrettyWithDay, fullName, getWeekRange, todayISO } from "@/lib/data";
 import {
@@ -24,7 +24,8 @@ export default function AllEmployeesPage() {
   const [query, setQuery] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
   const [orgFilter, setOrgFilter] = useState("all");
-  const [showInactive, setShowInactive] = useState(false);
+  // All Employees only shows active staff — deactivated employees live
+  // on the dedicated "Employees Left" page.
   const [empModal, setEmpModal] = useState(null); // { mode: "add" | "edit", employee? }
   const [deptModalOpen, setDeptModalOpen] = useState(false);
   const [orgModalOpen, setOrgModalOpen] = useState(false);
@@ -48,7 +49,7 @@ export default function AllEmployeesPage() {
   // row-level Deactivate button so we capture the date of leaving before
   // hitting the API.
   const [pendingDeactivate, setPendingDeactivate] = useState(null);
-  const { data: employees = [], isLoading } = useEmployees({ include_inactive: showInactive });
+  const { data: employees = [], isLoading } = useEmployees({ include_inactive: false });
   const { data: departments = [] } = useDepartments();
   const { data: organisations = [] } = useOrganisations();
 
@@ -235,17 +236,8 @@ export default function AllEmployeesPage() {
         </select>
       </div>
 
-      {isHR && (
-        <label className="flex items-center gap-2 text-[11px] text-zinc-600">
-          <input
-            type="checkbox"
-            checked={showInactive}
-            onChange={(e) => setShowInactive(e.target.checked)}
-            className="h-3.5 w-3.5 rounded border-zinc-300 text-orange-600 focus:ring-orange-500"
-          />
-          Show deactivated employees
-        </label>
-      )}
+      {/* Deactivated employees live on the dedicated "Employees Left"
+          page now, so the inline toggle has been removed. */}
 
       {/* Table — columns match the Excel: Organisation | S. No. | Name | Department | Reporting Manager | Date of Joining */}
       <Table maxHeight={600}>
@@ -446,11 +438,12 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     employee?.is_active === false,
   );
 
+  // Deactivation is driven by the inline checkbox in the form (which sets
+  // is_active=false + date_of_leaving on the same `update` mutation), so
+  // separate deactivate / reactivate mutations are no longer needed here.
   const create = useCreateEmployee();
   const update = useUpdateEmployee();
-  const deactivate = useDeactivateEmployee();
-  const reactivate = useReactivateEmployee();
-  const pending = create.isPending || update.isPending || deactivate.isPending || reactivate.isPending;
+  const pending = create.isPending || update.isPending;
 
   function up(key, val) { setForm((f) => ({ ...f, [key]: val })); }
 
@@ -485,30 +478,6 @@ function EmployeeFormModal({ mode, employee, departments, organisations = [], on
     } catch {
       /* toast already fired */
     }
-  }
-
-  // HR's "Deactivate" button now opens a small date-picker modal so the
-  // employee's last working day is captured alongside is_active=false.
-  const [deactivateDateOpen, setDeactivateDateOpen] = useState(false);
-  function handleDeactivate() {
-    if (!employee) return;
-    setDeactivateDateOpen(true);
-  }
-  async function confirmDeactivate(date_of_leaving) {
-    if (!employee) return;
-    try {
-      await deactivate.mutateAsync({ id: employee.id, date_of_leaving });
-      setDeactivateDateOpen(false);
-      onClose();
-    } catch {}
-  }
-
-  async function handleReactivate() {
-    if (!employee) return;
-    try {
-      await reactivate.mutateAsync(employee.id);
-      onClose();
-    } catch {}
   }
 
   return (
