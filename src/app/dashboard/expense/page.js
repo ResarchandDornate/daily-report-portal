@@ -246,10 +246,13 @@ export default function ExpensePage() {
         }} submitting={createExpense.isPending} />
       )}
 
-      {/* Admin view-toggle — HR / Smita / Tarini can flip between their
-          own expense list (employee-style flat table) and the company-wide
-          grouped table.  Regular employees never see this toggle. */}
-      {isAdmin && (
+      {/* Admin view-toggle — HR / Smita can flip between their own
+          expense list (employee-style flat table) and the company-wide
+          grouped table.  Tarini is review-only (she doesn't file her own
+          expenses), so the "My Expenses" tab is hidden for her — she
+          stays in the company-wide view permanently.  Regular employees
+          never see this toggle either. */}
+      {isAdmin && !isTariniReviewer && (
         <div className="flex items-center gap-1 rounded-md border border-zinc-200 bg-white p-1 w-fit">
           <button
             type="button"
@@ -411,6 +414,15 @@ export default function ExpensePage() {
           isAdmin={false}
           onOpen={(row) => setOpenModal(row)}
           onEdit={(row) => setEditingRow(row)}
+          onDelete={async (row) => {
+            const label = `${row.expense_type || "expense"} on ${row.date}${row.amount ? ` (₹${row.amount})` : ""}`;
+            if (!window.confirm(`Delete this ${label}?\n\nThis can't be undone.`)) return;
+            try {
+              await deleteExpense.mutateAsync(row.id);
+            } catch {
+              /* toast already fired in the mutation's onError */
+            }
+          }}
         />
       )}
 
@@ -1823,7 +1835,7 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
   );
 }
 
-function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
+function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
   // Full-screen image preview state for the inline bill thumbnails.
   const [preview, setPreview] = useState(null);
   return (
@@ -1905,21 +1917,33 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
                     Open →
                   </span>
                 ) : (
-                  // Edit is only enabled while the expense is still in
+                  // Edit + Delete only while the expense is still in
                   // pending / on-hold state.  After approval/rejection the
                   // row is locked — show a muted "Locked" label instead.
                   (r.status === "pending" || r.status === "onhold") ? (
-                    <button
-                      type="button"
-                      onClick={(e) => { e.stopPropagation(); onEdit(r); }}
-                      className="rounded-md border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-100"
-                    >
-                      Edit
-                    </button>
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onEdit(r); }}
+                        className="rounded-md border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-100"
+                      >
+                        Edit
+                      </button>
+                      {onDelete && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); onDelete(r); }}
+                          className="rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                          title="Delete this expense — only allowed while it's still pending or on hold"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <span
                       className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-500"
-                      title="Approved / rejected expenses can't be edited"
+                      title="Approved / rejected expenses can't be edited or deleted"
                     >
                       Locked
                     </span>
