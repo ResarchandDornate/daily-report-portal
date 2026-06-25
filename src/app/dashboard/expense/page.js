@@ -109,6 +109,8 @@ export default function ExpensePage() {
   const [openModal, setOpenModal] = useState(null); // single expense row | null
   // Edit modal — only used by employees on their own pending/onhold rows.
   const [editingRow, setEditingRow] = useState(null);
+  // Admin-only: monthly summary modal.
+  const [monthlyOpen, setMonthlyOpen] = useState(false);
 
   // Total amount across all currently-visible expenses (admin sees company-
   // wide total; employees see their own grand total).  Formatted in Indian
@@ -137,10 +139,22 @@ export default function ExpensePage() {
                 : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
             </p>
           </div>
-          {/* Total expense — plain inline text, Indian numbering. */}
-          <p className="text-sm font-semibold tabular-nums text-zinc-900">
-            Total Expense = <span className="text-orange-700">{totalAmountText}</span>
-          </p>
+          <div className="flex items-center gap-3">
+            {/* Admin-only: open the Monthly Summary modal. */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setMonthlyOpen(true)}
+                className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-orange-700"
+              >
+                Monthly Summary
+              </button>
+            )}
+            {/* Total expense — plain inline text, Indian numbering. */}
+            <p className="text-sm font-semibold tabular-nums text-zinc-900">
+              Total Expense = <span className="text-orange-700">{totalAmountText}</span>
+            </p>
+          </div>
         </div>
       </header>
 
@@ -237,6 +251,14 @@ export default function ExpensePage() {
           }}
           decidePending={decideExpense.isPending}
           deletePending={deleteExpense.isPending}
+        />
+      )}
+
+      {/* Admin-only: monthly expense summary across the whole company. */}
+      {monthlyOpen && isAdmin && (
+        <MonthlySummaryModal
+          allExpenses={expenses}
+          onClose={() => setMonthlyOpen(false)}
         />
       )}
     </div>
@@ -915,6 +937,263 @@ function BillThumbnail({ expense, onOpen }) {
         </span>
       )}
     </button>
+  );
+}
+
+function MonthlySummaryModal({ allExpenses, onClose }) {
+  // Month picker — defaults to the current calendar month.
+  const now = new Date();
+  const [year, setYear] = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1); // 1..12
+  // Advances are inline-editable.  Stored in component state by user_id;
+  // also persisted to localStorage keyed by `<year>-<month>` so a refresh
+  // doesn't lose entries until the admin gets a chance to download.
+  const storageKey = `expense-advances-${year}-${String(month).padStart(2, "0")}`;
+  const [advances, setAdvances] = useState(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
+  });
+  // Re-load advances if the admin changes the month.
+  useEffect(() => {
+    try {
+      const raw = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
+      setAdvances(raw ? JSON.parse(raw) : {});
+    } catch {
+      setAdvances({});
+    }
+  }, [storageKey]);
+  useEffect(() => {
+    try { window.localStorage.setItem(storageKey, JSON.stringify(advances)); } catch {}
+  }, [storageKey, advances]);
+
+  // Filter expenses to the selected month.
+  const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  const groups = useMemo(() => {
+    const byUser = new Map();
+    for (const e of allExpenses) {
+      if (!e.date || e.date < monthStart || e.date > monthEnd) continue;
+      if (!byUser.has(e.user_id)) {
+        byUser.set(e.user_id, {
+          userId: e.user_id,
+          name: e.user_name || "—",
+          department: e.user_department || "",
+          total: 0,
+          pending: 0,
+          approved: 0,
+          rejected: 0,
+          onhold: 0,
+          latestSubmit: e.created_at || e.date,
+        });
+      }
+      const g = byUser.get(e.user_id);
+      g.total += (e.amount || 0);
+      if (e.status === "pending")  g.pending  += 1;
+      if (e.status === "approved") g.approved += 1;
+      if (e.status === "rejected") g.rejected += 1;
+      if (e.status === "onhold")   g.onhold   += 1;
+      const ts = e.created_at || e.date;
+      if (ts > (g.latestSubmit || "")) g.latestSubmit = ts;
+    }
+    return Array.from(byUser.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [allExpenses, monthStart, monthEnd]);
+
+  // Footer totals.
+  const totals = useMemo(() => {
+    let amount = 0, advance = 0, subtotal = 0;
+    for (const g of groups) {
+      const a = parseInt(advances[g.userId], 10) || 0;
+      amount   += g.total;
+      advance  += a;
+      subtotal += (g.total - a);
+    }
+    return { amount, advance, subtotal };
+  }, [groups, advances]);
+
+  const monthLabel = new Date(year, month - 1, 1).toLocaleString(undefined, {
+    month: "long", year: "numeric",
+  });
+
+  // Build a small year list — last 5 years through next year.
+  const years = useMemo(() => {
+    const ys = [];
+    for (let y = now.getFullYear() - 4; y <= now.getFullYear() + 1; y += 1) ys.push(y);
+    return ys;
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [downloading, setDownloading] = useState(false);
+  async function downloadExcel() {
+    setDownloading(true);
+    try {
+      const { api } = await import("@/lib/api");
+      const resp = await api.post(
+        "/api/expenses/monthly-summary.xlsx",
+        { year, month, advances },
+        { responseType: "blob" },
+      );
+      const url = URL.createObjectURL(resp.data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `monthly-expenses-${year}-${String(month).padStart(2, "0")}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("Excel downloaded");
+    } catch (e) {
+      toast.error(e?.message || "Failed to download Excel");
+    } finally {
+      setDownloading(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-6xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-zinc-100 bg-orange-50 px-5 py-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div>
+              <h3 className="text-base font-semibold text-zinc-900">
+                Monthly Expense Summary
+              </h3>
+              <p className="text-xs text-zinc-500">{monthLabel}</p>
+            </div>
+            <select
+              value={month}
+              onChange={(e) => setMonth(Number(e.target.value))}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
+            >
+              {[
+                "January","February","March","April","May","June",
+                "July","August","September","October","November","December",
+              ].map((name, i) => (
+                <option key={i + 1} value={i + 1}>{name}</option>
+              ))}
+            </select>
+            <select
+              value={year}
+              onChange={(e) => setYear(Number(e.target.value))}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
+            >
+              {years.map((y) => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={downloadExcel}
+              disabled={downloading || groups.length === 0}
+              className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+            >
+              {downloading ? "Preparing…" : "Download Excel"}
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md p-1.5 text-zinc-500 hover:bg-white hover:text-zinc-800"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <div className="max-h-[78vh] overflow-y-auto p-5">
+          {groups.length === 0 ? (
+            <p className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500">
+              No expenses recorded in {monthLabel}.
+            </p>
+          ) : (
+            <table className="min-w-full divide-y divide-zinc-100 text-xs">
+              <thead className="bg-zinc-50 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+                <tr>
+                  <th className="px-3 py-2">Employee</th>
+                  <th className="px-3 py-2 text-right">Total Amount</th>
+                  <th className="px-3 py-2">Status</th>
+                  <th className="px-3 py-2 text-right">Advance</th>
+                  <th className="px-3 py-2 text-right">Subtotal</th>
+                  <th className="px-3 py-2">Submit Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-100">
+                {groups.map((g) => {
+                  const adv = parseInt(advances[g.userId], 10) || 0;
+                  const subtotal = g.total - adv;
+                  return (
+                    <tr key={g.userId}>
+                      <td className="px-3 py-2">
+                        <div className="font-medium text-zinc-900">{g.name}</div>
+                        {g.department && (
+                          <div className="text-[10px] text-zinc-500">{g.department}</div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-zinc-900">
+                        ₹{g.total.toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-3 py-2">
+                        <StatusMix
+                          pending={g.pending}
+                          approved={g.approved}
+                          rejected={g.rejected}
+                          onHold={g.onhold}
+                        />
+                      </td>
+                      <td className="px-3 py-2">
+                        <input
+                          type="number"
+                          min={0}
+                          value={advances[g.userId] ?? ""}
+                          onChange={(e) => setAdvances((prev) => ({
+                            ...prev,
+                            [g.userId]: e.target.value,
+                          }))}
+                          placeholder="0"
+                          className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-1 text-right text-xs tabular-nums"
+                        />
+                      </td>
+                      <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700">
+                        ₹{subtotal.toLocaleString("en-IN")}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-zinc-700">
+                        {g.latestSubmit
+                          ? formatPretty(String(g.latestSubmit).slice(0, 10))
+                          : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="bg-orange-50/60 font-semibold">
+                  <td className="px-3 py-2">Total · {groups.length} employees</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-900">
+                    ₹{totals.amount.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-2" />
+                  <td className="px-3 py-2 text-right tabular-nums text-zinc-900">
+                    ₹{totals.advance.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-700">
+                    ₹{totals.subtotal.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-2" />
+                </tr>
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
