@@ -125,6 +125,32 @@ export default function ExpensePage() {
   // Tarini (review-only) sticks to "all" by default but can also flip.
   const [viewMode, setViewMode] = useState("all");           // "all" | "mine"
 
+  // Current month's HR remark for the LOGGED-IN user — shown as a banner
+  // on the employee's My Expenses view so they know if payment is on hold
+  // and why.  Works for HR/Smita/Tarini in "mine" mode too.
+  const [myMonthRemark, setMyMonthRemark] = useState("");
+  useEffect(() => {
+    if (!me?.id) return;
+    let cancelled = false;
+    const today = new Date();
+    const y = today.getFullYear();
+    const m = today.getMonth() + 1;
+    (async () => {
+      try {
+        const { api } = await import("@/lib/api");
+        const resp = await api.get("/api/expenses/monthly-notes", {
+          params: { year: y, month: m },
+        });
+        if (cancelled) return;
+        const own = (resp.data?.items || []).find((n) => n.user_id === me.id);
+        setMyMonthRemark(own?.remark || "");
+      } catch {
+        if (!cancelled) setMyMonthRemark("");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [me?.id]);
+
   // Apply admin filters BEFORE anything else (totals, grouping, etc).
   // Employee view ignores these filters since they can't see them.
   // Admin in "mine" mode narrows to just the admin's own user_id and skips
@@ -329,6 +355,22 @@ export default function ExpensePage() {
           >
             Monthly Summary
           </button>
+        </div>
+      )}
+
+      {/* HR remark banner — shown on the employee's own view (or admin's
+          "My Expenses" mode).  HR fills the remark in the Monthly Summary
+          modal; the employee sees it here so they know why their payment
+          for the current month is on hold. */}
+      {(!isAdmin || viewMode === "mine") && myMonthRemark && (
+        <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-[12px] text-amber-900">
+          <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden>
+            <path fillRule="evenodd" d="M10 2a8 8 0 100 16 8 8 0 000-16zm-.75 4a.75.75 0 011.5 0v4.5a.75.75 0 01-1.5 0V6zM10 13.5a.9.9 0 100 1.8.9.9 0 000-1.8z" clipRule="evenodd" />
+          </svg>
+          <div>
+            <p className="font-semibold">Note from HR for this month:</p>
+            <p className="whitespace-pre-wrap">{myMonthRemark}</p>
+          </div>
         </div>
       )}
 
@@ -1189,30 +1231,96 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1); // 1..12
-  // Advances are inline-editable.  Stored in component state by user_id;
-  // also persisted to localStorage keyed by `<year>-<month>` so a refresh
-  // doesn't lose entries until the admin gets a chance to download.
-  const storageKey = `expense-advances-${year}-${String(month).padStart(2, "0")}`;
-  const [advances, setAdvances] = useState(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
-      return raw ? JSON.parse(raw) : {};
-    } catch {
-      return {};
-    }
-  });
-  // Re-load advances if the admin changes the month.
+  // Per-user notes for this month, fetched from the API on mount + month-
+  // change.  Shape: { <userId>: { advance: number, remark: string } }.
+  // Edits are persisted optimistically (UI updates first) then PUT'd to
+  // the backend — so the employee sees the same remark on their own view.
+  const [notes, setNotes] = useState({});
   useEffect(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(storageKey) : null;
-      setAdvances(raw ? JSON.parse(raw) : {});
-    } catch {
-      setAdvances({});
-    }
-  }, [storageKey]);
-  useEffect(() => {
-    try { window.localStorage.setItem(storageKey, JSON.stringify(advances)); } catch {}
-  }, [storageKey, advances]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const { api } = await import("@/lib/api");
+        const resp = await api.get("/api/expenses/monthly-notes", {
+          params: { year, month },
+        });
+        if (cancelled) return;
+        const map = {};
+        for (const n of (resp.data?.items || [])) {
+          map[n.user_id] = { advance: n.advance || 0, remark: n.remark || "" };
+        }
+        setNotes(map);
+      } catch {
+        if (!cancelled) setNotes({});
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [year, month]);
+
+  // Debounced PUT so HR's typing doesn't fire one PUT per keystroke.
+  function saveNote(userId, patch) {
+    setNotes((prev) => {
+      const cur = prev[userId] || { advance: 0, remark: "" };
+      const next = { ...cur, ...patch };
+      return { ...prev, [userId]: next };
+    });
+    if (saveNote._timers == null) saveNote._timers = new Map();
+    const timers = saveNote._timers;
+    const key = `${userId}`;
+    if (timers.has(key)) clearTimeout(timers.get(key));
+    timers.set(
+      key,
+      setTimeout(async () => {
+        try {
+          const { api } = await import("@/lib/api");
+          // Read the latest value from state at flush time.
+          const latest = (saveNote._latest || {})[userId] || {};
+          await api.put("/api/expenses/monthly-notes", {
+            user_id: userId,
+            year,
+            month,
+            advance: latest.advance ?? 0,
+            remark: latest.remark ?? "",
+          });
+        } catch {
+          /* surfaced by axios interceptor toast */
+        }
+      }, 600),
+    );
+  }
+  // Mirror the latest notes for the debounced flusher.
+  useEffect(() => { saveNote._latest = notes; }, [notes]);
+
+  // Compatibility shims so existing rendering code (which reads `advances`)
+  // keeps working — we now expose a derived map from `notes`.
+  const advances = useMemo(() => {
+    const m = {};
+    for (const [uid, n] of Object.entries(notes)) m[uid] = n.advance || 0;
+    return m;
+  }, [notes]);
+  const setAdvances = (updater) => {
+    // Legacy signature: callers pass `(prev) => ({...prev, [userId]: value})`
+    // or a flat object.  Translate to `saveNote` per-key.
+    setNotes((prev) => {
+      const prevAdv = {};
+      for (const [k, v] of Object.entries(prev)) prevAdv[k] = v.advance || 0;
+      const next = typeof updater === "function" ? updater(prevAdv) : updater;
+      const merged = { ...prev };
+      for (const [uid, val] of Object.entries(next)) {
+        merged[uid] = {
+          remark: prev[uid]?.remark || "",
+          advance: parseInt(val, 10) || 0,
+        };
+      }
+      // Also fire the debounced save for any changed key.
+      for (const uid of Object.keys(next)) {
+        if ((prev[uid]?.advance || 0) !== (parseInt(next[uid], 10) || 0)) {
+          saveNote(parseInt(uid, 10), { advance: parseInt(next[uid], 10) || 0 });
+        }
+      }
+      return merged;
+    });
+  };
 
   // Filter expenses to the selected month.
   const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -1334,7 +1442,16 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
               {years.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 print:hidden">
+            <button
+              type="button"
+              onClick={() => window.print()}
+              disabled={groups.length === 0}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
+              title="Print this Monthly Summary as a conveyance sheet"
+            >
+              Print
+            </button>
             <button
               type="button"
               onClick={downloadExcel}
@@ -1368,6 +1485,7 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2 text-right">Advance</th>
                   <th className="px-3 py-2 text-right">Subtotal</th>
+                  <th className="px-3 py-2">Remarks (visible to employee)</th>
                   <th className="px-3 py-2">Submit Date</th>
                 </tr>
               </thead>
@@ -1410,6 +1528,19 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                       <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700">
                         ₹{subtotal.toLocaleString("en-IN")}
                       </td>
+                      <td className="px-3 py-2 align-top">
+                        <textarea
+                          value={notes[g.userId]?.remark ?? ""}
+                          onChange={(e) => saveNote(g.userId, { remark: e.target.value })}
+                          rows={2}
+                          placeholder={
+                            g.onhold > 0
+                              ? "Why is this on hold?  (visible to employee)"
+                              : "Optional remark"
+                          }
+                          className="w-full min-w-[200px] rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+                        />
+                      </td>
                       <td className="px-3 py-2 whitespace-nowrap text-zinc-700">
                         {g.latestSubmit
                           ? formatPretty(String(g.latestSubmit).slice(0, 10))
@@ -1430,6 +1561,7 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                   <td className="px-3 py-2 text-right tabular-nums text-emerald-700">
                     ₹{totals.subtotal.toLocaleString("en-IN")}
                   </td>
+                  <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
                 </tr>
               </tbody>
