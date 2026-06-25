@@ -435,13 +435,14 @@ export function useExpenses() {
 export function useCreateExpense() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ date, mode, expense_type, travel_type, amount, remarks, bills }) => {
+    mutationFn: ({ date, mode, expense_type, travel_type, amount, advance, remarks, bills }) => {
       const fd = new FormData();
       fd.append("date", date);
       fd.append("mode", mode || "");
       fd.append("expense_type", expense_type);
       if (travel_type) fd.append("travel_type", travel_type);
       fd.append("amount", String(amount));
+      fd.append("advance", String(advance || 0));
       if (remarks) fd.append("remarks", remarks);
       // Multi-file: append once per file under the same field name so the
       // FastAPI endpoint receives them as `bills: list[UploadFile]`.

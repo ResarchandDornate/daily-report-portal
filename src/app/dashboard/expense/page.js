@@ -7,6 +7,7 @@ import {
   useCreateExpense,
   useDecideExpense,
   useDeleteExpense,
+  useDepartments,
   useExpenses,
   useMe,
   useUpdateExpense,
@@ -96,7 +97,8 @@ export default function ExpensePage() {
     return _isTariniEmail(me.email);
   }, [me]);
 
-  const { data: expenses = [], isLoading } = useExpenses();
+  const { data: rawExpenses = [], isLoading } = useExpenses();
+  const { data: departments = [] } = useDepartments();
   const createExpense = useCreateExpense();
   const decideExpense = useDecideExpense();
   const deleteExpense = useDeleteExpense();
@@ -111,6 +113,53 @@ export default function ExpensePage() {
   const [editingRow, setEditingRow] = useState(null);
   // Admin-only: monthly summary modal.
   const [monthlyOpen, setMonthlyOpen] = useState(false);
+  // Admin-only filter bar state.  All four start as "no filter".
+  const [search, setSearch] = useState("");
+  const [deptFilter, setDeptFilter] = useState("all");
+  const [monthFilter, setMonthFilter] = useState("all");     // "YYYY-MM" or "all"
+  const [statusFilter, setStatusFilter] = useState("all");   // "pending" | "approved" | "rejected" | "onhold" | "all"
+
+  // Apply admin filters BEFORE anything else (totals, grouping, etc).
+  // Employee view ignores these filters since they can't see them.
+  const expenses = useMemo(() => {
+    if (!isAdmin) return rawExpenses;
+    const q = (search || "").trim().toLowerCase();
+    return rawExpenses.filter((e) => {
+      if (statusFilter !== "all" && e.status !== statusFilter) return false;
+      if (deptFilter !== "all") {
+        // Match against the dept name (we don't get the slug in the expense
+        // payload, so name match is the cleanest).
+        const dn = (e.user_department || "").trim();
+        const wanted = departments.find((d) => d.slug === deptFilter)?.name || "";
+        if (dn !== wanted) return false;
+      }
+      if (monthFilter !== "all") {
+        // monthFilter is "YYYY-MM"; expense.date is "YYYY-MM-DD".
+        if (!e.date || !e.date.startsWith(monthFilter)) return false;
+      }
+      if (q) {
+        const hay = (e.user_name || "") + " " + (e.user_department || "") + " " + (e.remarks || "");
+        if (!hay.toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+  }, [rawExpenses, isAdmin, search, deptFilter, monthFilter, statusFilter, departments]);
+
+  // Build a month dropdown from the months that actually have expenses
+  // (newest first).  Saves admins from picking a month with no data.
+  const monthOptions = useMemo(() => {
+    if (!isAdmin) return [];
+    const seen = new Set();
+    for (const e of rawExpenses) {
+      if (e.date && e.date.length >= 7) seen.add(e.date.slice(0, 7));
+    }
+    return Array.from(seen).sort().reverse().map((ym) => {
+      const [y, m] = ym.split("-");
+      const label = new Date(Number(y), Number(m) - 1, 1)
+        .toLocaleString(undefined, { month: "long", year: "numeric" });
+      return { value: ym, label };
+    });
+  }, [rawExpenses, isAdmin]);
 
   // Total amount across all currently-visible expenses (admin sees company-
   // wide total; employees see their own grand total).  Formatted in Indian
@@ -168,6 +217,76 @@ export default function ExpensePage() {
             /* toast fired by hook */
           }
         }} submitting={createExpense.isPending} />
+      )}
+
+      {/* Admin-only filter bar — search by name / remarks, narrow by
+          department, month, or current status.  Employees never see this
+          because their own list is already small. */}
+      {isAdmin && (
+        <div className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="relative">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8" />
+                <path d="M21 21l-4.35-4.35" />
+              </svg>
+            </span>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search employee, department, remarks…"
+              className="w-full rounded-md border border-zinc-300 bg-white pl-8 pr-3 py-1.5 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+            />
+          </div>
+          <select
+            value={deptFilter}
+            onChange={(e) => setDeptFilter(e.target.value)}
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+          >
+            <option value="all">All departments</option>
+            {departments.map((d) => (
+              <option key={d.slug} value={d.slug}>{d.name}</option>
+            ))}
+          </select>
+          <select
+            value={monthFilter}
+            onChange={(e) => setMonthFilter(e.target.value)}
+            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+          >
+            <option value="all">All months</option>
+            {monthOptions.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          <div className="flex items-center gap-2">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+            >
+              <option value="all">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="onhold">On Hold</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+            {(search || deptFilter !== "all" || monthFilter !== "all" || statusFilter !== "all") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch("");
+                  setDeptFilter("all");
+                  setMonthFilter("all");
+                  setStatusFilter("all");
+                }}
+                className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-[11px] font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Admin: grouped table (one row per employee).
@@ -280,6 +399,9 @@ function ExpenseForm({ onSubmit, submitting }) {
   const [kilometers, setKilometers] = useState("");
   const [ratePerKm, setRatePerKm] = useState("");
   const [amount, setAmount] = useState("");
+  // Advance — money HR already gave the employee before incurring this
+  // expense.  Subtotal owed = amount - advance.  Defaults to 0.
+  const [advance, setAdvance] = useState("");
   const [remarks, setRemarks] = useState("");
   const [bills, setBills] = useState([]);        // File[]
   const [previews, setPreviews] = useState([]);  // { name, url|null }[]
@@ -376,6 +498,15 @@ function ExpenseForm({ onSubmit, submitting }) {
       toast.error("Amount must be a non-negative number.");
       return;
     }
+    const adv = parseInt(advance, 10) || 0;
+    if (adv < 0) {
+      toast.error("Advance must be a non-negative number.");
+      return;
+    }
+    if (adv > amt) {
+      toast.error("Advance can't be larger than the expense amount.");
+      return;
+    }
     let finalTravelType = "";
     if (expenseType === "travel") {
       if (!travelType) {
@@ -407,12 +538,14 @@ function ExpenseForm({ onSubmit, submitting }) {
       expense_type: expenseType,
       travel_type: finalTravelType,
       amount: amt,
+      advance: adv,
       remarks: finalRemarks,
       bills,
     }).then(() => {
       // Reset form on success — keep date so multiple same-day submissions
       // are fast.
       setAmount("");
+      setAdvance("");
       setRemarks("");
       setBills([]);
       setKilometers("");
@@ -523,6 +656,25 @@ function ExpenseForm({ onSubmit, submitting }) {
             className={inputClass}
             required
           />
+        </Field>
+        <Field label="Advance received (₹, optional)">
+          <input
+            type="number"
+            min={0}
+            value={advance}
+            onChange={(e) => setAdvance(e.target.value)}
+            placeholder="0"
+            className={inputClass}
+          />
+          {amount && advance && parseInt(advance, 10) > 0 && (
+            <p className="mt-1 text-[10px] text-emerald-700">
+              Subtotal owed: ₹
+              {Math.max(
+                0,
+                (parseInt(amount, 10) || 0) - (parseInt(advance, 10) || 0),
+              ).toLocaleString("en-IN")}
+            </p>
+          )}
         </Field>
         <Field label="Bills / Receipts (up to 10 — image or PDF)">
           <input
@@ -801,6 +953,8 @@ function EmployeeExpensesModal({ group, onClose }) {
                 <Table.Th>Type</Table.Th>
                 <Table.Th>Mode</Table.Th>
                 <Table.Th className="text-right">Amount</Table.Th>
+                <Table.Th className="text-right">Advance</Table.Th>
+                <Table.Th className="text-right">Subtotal</Table.Th>
                 <Table.Th>Status</Table.Th>
                 <Table.Th>Bill</Table.Th>
                 <Table.Th>Remarks</Table.Th>
@@ -820,6 +974,12 @@ function EmployeeExpensesModal({ group, onClose }) {
                   <Table.Td className="text-right tabular-nums font-medium">
                     ₹{(r.amount || 0).toLocaleString("en-IN")}
                   </Table.Td>
+                  <Table.Td className="text-right tabular-nums text-zinc-700">
+                    {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
+                  </Table.Td>
+                  <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
+                    ₹{Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}
+                  </Table.Td>
                   <Table.Td>
                     <StatusPill status={r.status} />
                   </Table.Td>
@@ -834,16 +994,29 @@ function EmployeeExpensesModal({ group, onClose }) {
                   </Table.Td>
                 </Table.Row>
               ))}
-              {/* Subtotal row — sums the Amount column. */}
-              <Table.Row className="bg-orange-50/60 font-semibold">
-                <Table.Td className="text-zinc-900" colSpan={3}>
-                  Subtotal · {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"}
-                </Table.Td>
-                <Table.Td className="text-right tabular-nums text-zinc-900">
-                  ₹{(group.total || 0).toLocaleString("en-IN")}
-                </Table.Td>
-                <Table.Td colSpan={3} />
-              </Table.Row>
+              {/* Subtotal row — sums Amount + Advance, then shows net. */}
+              {(() => {
+                const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
+                const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
+                const totalNet = Math.max(0, totalAmt - totalAdv);
+                return (
+                  <Table.Row className="bg-orange-50/60 font-semibold">
+                    <Table.Td className="text-zinc-900" colSpan={3}>
+                      Subtotal · {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"}
+                    </Table.Td>
+                    <Table.Td className="text-right tabular-nums text-zinc-900">
+                      ₹{totalAmt.toLocaleString("en-IN")}
+                    </Table.Td>
+                    <Table.Td className="text-right tabular-nums text-zinc-900">
+                      ₹{totalAdv.toLocaleString("en-IN")}
+                    </Table.Td>
+                    <Table.Td className="text-right tabular-nums text-emerald-700">
+                      ₹{totalNet.toLocaleString("en-IN")}
+                    </Table.Td>
+                    <Table.Td colSpan={3} />
+                  </Table.Row>
+                );
+              })()}
             </Table.Body>
           </Table>
         </div>
@@ -1298,6 +1471,7 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
   // store whatever the server has so it round-trips cleanly.
   const [travelType, setTravelType] = useState(row.travel_type || "");
   const [amount, setAmount] = useState(String(row.amount ?? 0));
+  const [advance, setAdvance] = useState(String(row.advance ?? 0));
   const [remarks, setRemarks] = useState(row.remarks || "");
 
   useEffect(() => {
@@ -1311,6 +1485,15 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
       toast.error("Amount must be a non-negative number.");
       return;
     }
+    const adv = parseInt(advance, 10) || 0;
+    if (adv < 0) {
+      toast.error("Advance must be a non-negative number.");
+      return;
+    }
+    if (adv > amt) {
+      toast.error("Advance can't be larger than the expense amount.");
+      return;
+    }
     if (expenseType === "travel" && !travelType) {
       toast.error("Pick a travel type before saving.");
       return;
@@ -1321,6 +1504,7 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
       expense_type: expenseType,
       travel_type: expenseType === "travel" ? travelType : "",
       amount: amt,
+      advance: adv,
       remarks: remarks.trim(),
     });
   }
@@ -1419,6 +1603,16 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
               required
             />
           </Field>
+          <Field label="Advance received (₹)">
+            <input
+              type="number"
+              min={0}
+              value={advance}
+              onChange={(e) => setAdvance(e.target.value)}
+              placeholder="0"
+              className={inputClass}
+            />
+          </Field>
           <div className="sm:col-span-2">
             <Field label="Remarks">
               <textarea
@@ -1465,6 +1659,8 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
           <Table.Th>Type</Table.Th>
           <Table.Th>Mode</Table.Th>
           <Table.Th className="text-right">Amount</Table.Th>
+          <Table.Th className="text-right">Advance</Table.Th>
+          <Table.Th className="text-right">Subtotal</Table.Th>
           <Table.Th>Status</Table.Th>
           <Table.Th>Bill</Table.Th>
           <Table.Th>Remarks</Table.Th>
@@ -1473,10 +1669,10 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={isAdmin ? 9 : 8} message="Loading expenses…" />
+          <Table.Empty colSpan={isAdmin ? 11 : 10} message="Loading expenses…" />
         ) : rows.length === 0 ? (
           <Table.Empty
-            colSpan={isAdmin ? 9 : 8}
+            colSpan={isAdmin ? 11 : 10}
             message={isAdmin ? "No expenses to review yet." : "You haven't submitted any expenses yet."}
           />
         ) : (
@@ -1507,6 +1703,12 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit }) {
               <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
               <Table.Td className="text-right tabular-nums font-medium">
                 ₹{(r.amount || 0).toLocaleString("en-IN")}
+              </Table.Td>
+              <Table.Td className="text-right tabular-nums text-zinc-700">
+                {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
+              </Table.Td>
+              <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
+                ₹{Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}
               </Table.Td>
               <Table.Td>
                 <StatusPill status={r.status} />
