@@ -188,22 +188,12 @@ export default function ExpensePage() {
                 : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            {/* Admin-only: open the Monthly Summary modal. */}
-            {isAdmin && (
-              <button
-                type="button"
-                onClick={() => setMonthlyOpen(true)}
-                className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-orange-700"
-              >
-                Monthly Summary
-              </button>
-            )}
-            {/* Total expense — plain inline text, Indian numbering. */}
-            <p className="text-sm font-semibold tabular-nums text-zinc-900">
-              Total Expense = <span className="text-orange-700">{totalAmountText}</span>
-            </p>
-          </div>
+          {/* Total expense — plain inline text, Indian numbering.  The
+              Monthly Summary trigger has moved down into the filter bar so
+              the header stays clean. */}
+          <p className="text-sm font-semibold tabular-nums text-zinc-900">
+            Total Expense = <span className="text-orange-700">{totalAmountText}</span>
+          </p>
         </div>
       </header>
 
@@ -223,8 +213,8 @@ export default function ExpensePage() {
           department, month, or current status.  Employees never see this
           because their own list is already small. */}
       {isAdmin && (
-        <div className="grid grid-cols-1 gap-2 rounded-lg border border-zinc-200 bg-white p-2.5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="relative">
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-2.5">
+          <div className="relative flex-1 min-w-[200px]">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8" />
@@ -242,7 +232,7 @@ export default function ExpensePage() {
           <select
             value={deptFilter}
             onChange={(e) => setDeptFilter(e.target.value)}
-            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+            className="w-44 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
           >
             <option value="all">All departments</option>
             {departments.map((d) => (
@@ -252,7 +242,7 @@ export default function ExpensePage() {
           <select
             value={monthFilter}
             onChange={(e) => setMonthFilter(e.target.value)}
-            className="rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+            className="w-44 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
           >
             <option value="all">All months</option>
             {monthOptions.map((m) => (
@@ -263,7 +253,7 @@ export default function ExpensePage() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="flex-1 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
+              className="w-36 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
             >
               <option value="all">All statuses</option>
               <option value="pending">Pending</option>
@@ -286,6 +276,15 @@ export default function ExpensePage() {
               </button>
             )}
           </div>
+          {/* Monthly Summary trigger lives alongside the filters so all the
+              admin tools sit in one row. */}
+          <button
+            type="button"
+            onClick={() => setMonthlyOpen(true)}
+            className="ml-auto rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-orange-700"
+          >
+            Monthly Summary
+          </button>
         </div>
       )}
 
@@ -760,6 +759,7 @@ function groupExpensesByUser(expenses) {
         userDepartment: e.user_department || "",
         expenses: [],
         total: 0,
+        advance: 0,
         pendingCount: 0,
         approvedCount: 0,
         rejectedCount: 0,
@@ -772,6 +772,7 @@ function groupExpensesByUser(expenses) {
     const g = byUser.get(key);
     g.expenses.push(e);
     g.total += (e.amount || 0);
+    g.advance += (e.advance || 0);
     if (e.status === "pending") g.pendingCount += 1;
     else if (e.status === "approved") g.approvedCount += 1;
     else if (e.status === "rejected") g.rejectedCount += 1;
@@ -796,6 +797,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
           <Table.Th>Date</Table.Th>
           <Table.Th>Employee</Table.Th>
           <Table.Th>Total Amount</Table.Th>
+          <Table.Th>Advance</Table.Th>
+          <Table.Th>Subtotal</Table.Th>
           <Table.Th>Status</Table.Th>
           <Table.Th>Bills</Table.Th>
           <Table.Th>Submit Date</Table.Th>
@@ -804,9 +807,9 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={7} message="Loading expenses…" />
+          <Table.Empty colSpan={9} message="Loading expenses…" />
         ) : groups.length === 0 ? (
-          <Table.Empty colSpan={7} message="No expenses to review yet." />
+          <Table.Empty colSpan={9} message="No expenses to review yet." />
         ) : (
           groups.map((g) => (
             <Table.Row
@@ -827,12 +830,18 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
               <Table.Td className="tabular-nums font-semibold text-zinc-900">
                 ₹{(g.total || 0).toLocaleString("en-IN")}
               </Table.Td>
+              <Table.Td className="tabular-nums text-zinc-700">
+                {g.advance > 0 ? `₹${g.advance.toLocaleString("en-IN")}` : "—"}
+              </Table.Td>
+              <Table.Td className="tabular-nums font-semibold text-emerald-700">
+                ₹{Math.max(0, (g.total || 0) - (g.advance || 0)).toLocaleString("en-IN")}
+              </Table.Td>
               <Table.Td>
-                <StatusMix
+                <GroupStatusPill
                   pending={g.pendingCount}
-                  approved={g.approvedCount}
-                  rejected={g.rejectedCount}
                   onHold={g.onHoldCount}
+                  rejected={g.rejectedCount}
+                  approved={g.approvedCount}
                 />
               </Table.Td>
               <Table.Td>
@@ -884,6 +893,20 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
       </Table.Body>
     </Table>
   );
+}
+
+function GroupStatusPill({ pending, onHold, rejected, approved }) {
+  // Show a single status label for an employee's expense group, picking
+  // the MOST URGENT state across all their expenses.  Priority:
+  //   Pending  >  On Hold  >  Rejected  >  Approved
+  // (Pending is most urgent because HR has to act on it.)
+  let status;
+  if (pending > 0)       status = "pending";
+  else if (onHold > 0)   status = "onhold";
+  else if (rejected > 0) status = "rejected";
+  else if (approved > 0) status = "approved";
+  else return <span className="text-zinc-400">—</span>;
+  return <StatusPill status={status} />;
 }
 
 function StatusMix({ pending, approved, rejected, onHold }) {
