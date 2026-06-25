@@ -118,11 +118,22 @@ export default function ExpensePage() {
   const [deptFilter, setDeptFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("all");     // "YYYY-MM" or "all"
   const [statusFilter, setStatusFilter] = useState("all");   // "pending" | "approved" | "rejected" | "onhold" | "all"
+  // Admin view-toggle.  HR / Smita can both file their own expenses AND
+  // approve others', so they need a way to swap between:
+  //   "all"  — the admin grouped table across the company
+  //   "mine" — the flat per-row table of just their own submissions
+  // Tarini (review-only) sticks to "all" by default but can also flip.
+  const [viewMode, setViewMode] = useState("all");           // "all" | "mine"
 
   // Apply admin filters BEFORE anything else (totals, grouping, etc).
   // Employee view ignores these filters since they can't see them.
+  // Admin in "mine" mode narrows to just the admin's own user_id and skips
+  // the org-wide filter bar entirely.
   const expenses = useMemo(() => {
     if (!isAdmin) return rawExpenses;
+    if (viewMode === "mine") {
+      return rawExpenses.filter((e) => me && e.user_id === me.id);
+    }
     const q = (search || "").trim().toLowerCase();
     return rawExpenses.filter((e) => {
       if (statusFilter !== "all" && e.status !== statusFilter) return false;
@@ -143,7 +154,7 @@ export default function ExpensePage() {
       }
       return true;
     });
-  }, [rawExpenses, isAdmin, search, deptFilter, monthFilter, statusFilter, departments]);
+  }, [rawExpenses, isAdmin, viewMode, me, search, deptFilter, monthFilter, statusFilter, departments]);
 
   // Build a month dropdown from the months that actually have expenses
   // (newest first).  Saves admins from picking a month with no data.
@@ -209,10 +220,43 @@ export default function ExpensePage() {
         }} submitting={createExpense.isPending} />
       )}
 
-      {/* Admin-only filter bar — search by name / remarks, narrow by
-          department, month, or current status.  Employees never see this
-          because their own list is already small. */}
+      {/* Admin view-toggle — HR / Smita / Tarini can flip between their
+          own expense list (employee-style flat table) and the company-wide
+          grouped table.  Regular employees never see this toggle. */}
       {isAdmin && (
+        <div className="flex items-center gap-1 rounded-md border border-zinc-200 bg-white p-1 w-fit">
+          <button
+            type="button"
+            onClick={() => setViewMode("mine")}
+            className={
+              "rounded px-3 py-1 text-xs font-medium transition " +
+              (viewMode === "mine"
+                ? "bg-orange-600 text-white shadow-sm"
+                : "text-zinc-600 hover:bg-zinc-100")
+            }
+          >
+            My Expenses
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("all")}
+            className={
+              "rounded px-3 py-1 text-xs font-medium transition " +
+              (viewMode === "all"
+                ? "bg-orange-600 text-white shadow-sm"
+                : "text-zinc-600 hover:bg-zinc-100")
+            }
+          >
+            All Employees
+          </button>
+        </div>
+      )}
+
+      {/* Admin-only filter bar — search by name / remarks, narrow by
+          department, month, or current status.  Hidden when admin is
+          viewing only their OWN expenses (their list is small enough
+          without filters). */}
+      {isAdmin && viewMode === "all" && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-2.5">
           <div className="relative flex-1 min-w-[200px]">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
@@ -288,9 +332,10 @@ export default function ExpensePage() {
         </div>
       )}
 
-      {/* Admin: grouped table (one row per employee).
-          Employee: flat table (one row per expense). */}
-      {isAdmin ? (
+      {/* Admin in "all" mode → grouped table (one row per employee).
+          Admin in "mine" mode → flat employee-style table for their own
+          submissions.  Regular employees → always the flat table. */}
+      {isAdmin && viewMode === "all" ? (
         <AdminEmployeeTable
           expenses={expenses}
           isLoading={isLoading}
@@ -318,7 +363,10 @@ export default function ExpensePage() {
         <ExpenseTable
           rows={expenses}
           isLoading={isLoading}
-          isAdmin={isAdmin}
+          // When the admin is viewing their OWN expenses, render the table
+          // in employee mode (Edit buttons, no per-row click-to-open) — they
+          // act as the owner of those rows.
+          isAdmin={false}
           onOpen={(row) => setOpenModal(row)}
           onEdit={(row) => setEditingRow(row)}
         />
@@ -1418,32 +1466,6 @@ function BillPreviewOverlay({ url, filename, onClose }) {
         )}
       </div>
     </div>
-  );
-}
-
-function BillIndicator({ count }) {
-  if (count > 0) {
-    return (
-      <span
-        className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200"
-        title={`${count} bill${count === 1 ? "" : "s"} attached`}
-      >
-        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-          <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.6l6.3-6.3a1 1 0 0 1 1.4 0Z" />
-        </svg>
-        {count > 1 && <span>{count}</span>}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex items-center justify-center rounded-full bg-rose-50 px-1.5 py-0.5 text-rose-600 ring-1 ring-rose-200"
-      title="No bill attached"
-    >
-      <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-        <path d="M4.7 4.7a1 1 0 0 1 1.4 0L10 8.6l3.9-3.9a1 1 0 1 1 1.4 1.4L11.4 10l3.9 3.9a1 1 0 0 1-1.4 1.4L10 11.4l-3.9 3.9a1 1 0 1 1-1.4-1.4L8.6 10 4.7 6.1a1 1 0 0 1 0-1.4Z" />
-      </svg>
-    </span>
   );
 }
 
