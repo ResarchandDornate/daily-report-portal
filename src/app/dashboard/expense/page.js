@@ -116,7 +116,13 @@ export default function ExpensePage() {
   // Admin-only filter bar state.  All four start as "no filter".
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
-  const [monthFilter, setMonthFilter] = useState("all");     // "YYYY-MM" or "all"
+  // Default the month filter to the CURRENT month so admins open the page
+  // already focused on this month's expenses.  They can flip back to "All
+  // months" via the dropdown.
+  const [monthFilter, setMonthFilter] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   const [statusFilter, setStatusFilter] = useState("all");   // "pending" | "approved" | "rejected" | "onhold" | "all"
   // Admin view-toggle.  HR / Smita can both file their own expenses AND
   // approve others', so they need a way to swap between:
@@ -124,6 +130,31 @@ export default function ExpensePage() {
   //   "mine" — the flat per-row table of just their own submissions
   // Tarini (review-only) sticks to "all" by default but can also flip.
   const [viewMode, setViewMode] = useState("all");           // "all" | "mine"
+
+  // All advances HR has recorded across history — drives the "Advances"
+  // panel below the grouped admin table.  Refetched after the Monthly
+  // Summary modal closes (HR edits advances in there).
+  const [advancesList, setAdvancesList] = useState([]);
+  const [advancesLoading, setAdvancesLoading] = useState(false);
+  useEffect(() => {
+    if (!isAdmin || viewMode !== "all") return;
+    if (monthlyOpen) return;  // skip while modal is open — refetch on close
+    let cancelled = false;
+    setAdvancesLoading(true);
+    (async () => {
+      try {
+        const { api } = await import("@/lib/api");
+        const resp = await api.get("/api/expenses/advances");
+        if (cancelled) return;
+        setAdvancesList(resp.data?.items || []);
+      } catch {
+        if (!cancelled) setAdvancesList([]);
+      } finally {
+        if (!cancelled) setAdvancesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin, viewMode, monthlyOpen]);
 
   // Current month's HR remark for the LOGGED-IN user — shown as a banner
   // on the employee's My Expenses view so they know if payment is on hold
@@ -183,10 +214,13 @@ export default function ExpensePage() {
   }, [rawExpenses, isAdmin, viewMode, me, search, deptFilter, monthFilter, statusFilter, departments]);
 
   // Build a month dropdown from the months that actually have expenses
-  // (newest first).  Saves admins from picking a month with no data.
+  // (newest first).  Always includes the CURRENT month even if it has no
+  // expenses yet — so the default month filter is selectable.
   const monthOptions = useMemo(() => {
     if (!isAdmin) return [];
     const seen = new Set();
+    const now = new Date();
+    seen.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
     for (const e of rawExpenses) {
       if (e.date && e.date.length >= 7) seen.add(e.date.slice(0, 7));
     }
@@ -385,6 +419,8 @@ export default function ExpensePage() {
           expenses={expenses}
           isLoading={isLoading}
           decidePending={decideExpense.isPending}
+          hideOnHold={isTariniReviewer}
+          monthFilter={monthFilter}
           onOpenEmployee={(group) => setEmpModal(group)}
           onBatchDecide={async (group, decision) => {
             const pending = group.expenses.filter((e) => e.status === "pending");
@@ -426,6 +462,12 @@ export default function ExpensePage() {
         />
       )}
 
+      {/* Advances panel — shown below the grouped admin table.  Lists every
+          advance HR has recorded (across all months), newest first. */}
+      {isAdmin && viewMode === "all" && (
+        <AdvancesTable items={advancesList} isLoading={advancesLoading} />
+      )}
+
       {/* Admin: per-employee modal listing every expense inline (with
           clickable bill thumbnails — no separate "Open" detail step). */}
       {empModal && (
@@ -455,6 +497,7 @@ export default function ExpensePage() {
         <ExpenseModal
           row={openModal}
           isAdmin={isAdmin}
+          hideOnHold={isTariniReviewer}
           onClose={() => setOpenModal(null)}
           onDecide={async (decision, note) => {
             try {
@@ -503,6 +546,7 @@ function ExpenseForm({ onSubmit, submitting }) {
   // Advance — money HR already gave the employee before incurring this
   // expense.  Subtotal owed = amount - advance.  Defaults to 0.
   const [advance, setAdvance] = useState("");
+  const [siteName, setSiteName] = useState("");
   const [remarks, setRemarks] = useState("");
   const [bills, setBills] = useState([]);        // File[]
   const [previews, setPreviews] = useState([]);  // { name, url|null }[]
@@ -640,6 +684,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       travel_type: finalTravelType,
       amount: amt,
       advance: adv,
+      site_name: siteName.trim(),
       remarks: finalRemarks,
       bills,
     }).then(() => {
@@ -647,6 +692,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       // are fast.
       setAmount("");
       setAdvance("");
+      setSiteName("");
       setRemarks("");
       setBills([]);
       setKilometers("");
@@ -777,6 +823,16 @@ function ExpenseForm({ onSubmit, submitting }) {
             </p>
           )}
         </Field>
+        <Field label="Site Name (optional)">
+          <input
+            type="text"
+            value={siteName}
+            onChange={(e) => setSiteName(e.target.value)}
+            placeholder="e.g. Nhava Sheva WH, Okhla Custom House"
+            maxLength={255}
+            className={inputClass}
+          />
+        </Field>
         <Field label="Bills / Receipts (up to 10 — image or PDF)">
           <input
             type="file"
@@ -890,10 +946,35 @@ function groupExpensesByUser(expenses) {
   });
 }
 
-function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide }) {
+function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter }) {
   const groups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
+  // Totals across whatever the parent has already filtered to (usually the
+  // current month).  Shown as a footer row so the user can see the visible
+  // total without scanning every row.
+  const visibleTotals = useMemo(() => {
+    let amount = 0;
+    let advance = 0;
+    for (const g of groups) {
+      amount += g.total || 0;
+      advance += g.advance || 0;
+    }
+    return { amount, advance, subtotal: Math.max(0, amount - advance) };
+  }, [groups]);
+  // Month label for the footer.  "All months" when no specific month is
+  // selected; otherwise e.g. "June 2026".
+  const monthLabel = useMemo(() => {
+    if (!monthFilter || monthFilter === "all") return "all months";
+    const [y, m] = monthFilter.split("-");
+    if (!y || !m) return "all months";
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleString(undefined, {
+      month: "long", year: "numeric",
+    });
+  }, [monthFilter]);
+  // Fixed scroll area — keeps the table at a stable height so the page
+  // layout doesn't jump as rows are added.  Scrolls vertically once the
+  // body grows past this height.
   return (
-    <Table maxHeight={520}>
+    <Table maxHeight={420}>
       <Table.Head>
         <Table.Row>
           <Table.Th>Date</Table.Th>
@@ -968,14 +1049,16 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                     >
                       Reject
                     </button>
-                    <button
-                      type="button"
-                      disabled={decidePending}
-                      onClick={() => onBatchDecide(g, "onhold")}
-                      className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
-                    >
-                      On Hold
-                    </button>
+                    {!hideOnHold && (
+                      <button
+                        type="button"
+                        disabled={decidePending}
+                        onClick={() => onBatchDecide(g, "onhold")}
+                        className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                      >
+                        On Hold
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={decidePending}
@@ -991,6 +1074,25 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
               </Table.Td>
             </Table.Row>
           ))
+        )}
+        {/* Footer total — sums across whatever's currently visible (default
+            is the current month, so this reads as "Total for June 2026"). */}
+        {!isLoading && groups.length > 0 && (
+          <Table.Row className="bg-orange-50/60 font-semibold">
+            <Table.Td className="whitespace-nowrap text-zinc-900" colSpan={2}>
+              Total for {monthLabel} · {groups.length} employee{groups.length === 1 ? "" : "s"}
+            </Table.Td>
+            <Table.Td className="tabular-nums text-zinc-900">
+              ₹{visibleTotals.amount.toLocaleString("en-IN")}
+            </Table.Td>
+            <Table.Td className="tabular-nums text-zinc-700">
+              {visibleTotals.advance > 0 ? `₹${visibleTotals.advance.toLocaleString("en-IN")}` : "—"}
+            </Table.Td>
+            <Table.Td className="tabular-nums text-emerald-700">
+              ₹{visibleTotals.subtotal.toLocaleString("en-IN")}
+            </Table.Td>
+            <Table.Td colSpan={4} />
+          </Table.Row>
         )}
       </Table.Body>
     </Table>
@@ -1038,6 +1140,22 @@ function EmployeeExpensesModal({ group, onClose }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
+  // Per-type breakdown (e.g. Material ₹2,500 · Travel ₹1,000 · Others ₹998)
+  // shown as chips in the modal header so HR can see at-a-glance where this
+  // employee's spend went.
+  const typeBreakdown = useMemo(() => {
+    if (!group) return [];
+    const sums = new Map();
+    for (const e of group.expenses || []) {
+      const label = e.travel_type
+        ? `${e.expense_type || "Travel"} (${e.travel_type})`
+        : (e.expense_type || "Other");
+      sums.set(label, (sums.get(label) || 0) + (e.amount || 0));
+    }
+    return Array.from(sums.entries())
+      .map(([label, amount]) => ({ label, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [group]);
   if (!group) return null;
   return (
     <div
@@ -1048,8 +1166,8 @@ function EmployeeExpensesModal({ group, onClose }) {
         className="w-full max-w-6xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-zinc-100 bg-orange-50 px-5 py-4">
-          <div>
+        <div className="flex items-start justify-between gap-3 border-b border-zinc-100 bg-orange-50 px-5 py-4">
+          <div className="min-w-0">
             <h3 className="text-base font-semibold text-zinc-900">
               {group.userName}&apos;s expenses
             </h3>
@@ -1059,6 +1177,19 @@ function EmployeeExpensesModal({ group, onClose }) {
               total ₹{(group.total || 0).toLocaleString("en-IN")}
               {group.userDepartment && ` · ${group.userDepartment}`}
             </p>
+            {typeBreakdown.length > 0 && (
+              <p className="mt-1.5 text-[13px] text-zinc-700">
+                {typeBreakdown.map((t, i) => (
+                  <span key={t.label}>
+                    {i > 0 && <span className="mx-1.5 text-zinc-400">·</span>}
+                    <span className="capitalize">{t.label}</span>{" "}
+                    <span className="tabular-nums">
+                      ₹{t.amount.toLocaleString("en-IN")}
+                    </span>
+                  </span>
+                ))}
+              </p>
+            )}
           </div>
           <button
             type="button"
@@ -1077,6 +1208,7 @@ function EmployeeExpensesModal({ group, onClose }) {
                 <Table.Th>Date</Table.Th>
                 <Table.Th>Type</Table.Th>
                 <Table.Th>Mode</Table.Th>
+                <Table.Th>Site</Table.Th>
                 <Table.Th className="text-right">Amount</Table.Th>
                 <Table.Th className="text-right">Advance</Table.Th>
                 <Table.Th className="text-right">Subtotal</Table.Th>
@@ -1096,6 +1228,9 @@ function EmployeeExpensesModal({ group, onClose }) {
                     )}
                   </Table.Td>
                   <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
+                  <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
+                    {r.site_name || "—"}
+                  </Table.Td>
                   <Table.Td className="text-right tabular-nums font-medium">
                     ₹{(r.amount || 0).toLocaleString("en-IN")}
                   </Table.Td>
@@ -1119,14 +1254,15 @@ function EmployeeExpensesModal({ group, onClose }) {
                   </Table.Td>
                 </Table.Row>
               ))}
-              {/* Subtotal row — sums Amount + Advance, then shows net. */}
+              {/* Subtotal row — sums Amount + Advance, then shows net.  Site
+                  column is rolled into the leading label colSpan. */}
               {(() => {
                 const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
                 const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
                 const totalNet = Math.max(0, totalAmt - totalAdv);
                 return (
                   <Table.Row className="bg-orange-50/60 font-semibold">
-                    <Table.Td className="text-zinc-900" colSpan={3}>
+                    <Table.Td className="text-zinc-900" colSpan={4}>
                       Subtotal · {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"}
                     </Table.Td>
                     <Table.Td className="text-right tabular-nums text-zinc-900">
@@ -1391,20 +1527,23 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
     return ys;
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Multi-sheet workbook: Overview tab (company total + per-dept totals +
+  // per-employee summary) plus one tab per department listing every
+  // individual expense in that department for the chosen month.
   const [downloading, setDownloading] = useState(false);
   async function downloadExcel() {
     setDownloading(true);
     try {
       const { api } = await import("@/lib/api");
       const resp = await api.post(
-        "/api/expenses/monthly-summary.xlsx",
-        { year, month, advances },
+        "/api/expenses/department-summary.xlsx",
+        { year, month },
         { responseType: "blob" },
       );
       const url = URL.createObjectURL(resp.data);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `monthly-expenses-${year}-${String(month).padStart(2, "0")}.xlsx`;
+      a.download = `expense-summary-${year}-${String(month).padStart(2, "0")}.xlsx`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -1454,21 +1593,13 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
               {years.map((y) => <option key={y} value={y}>{y}</option>)}
             </select>
           </div>
-          <div className="flex items-center gap-2 print:hidden">
-            <button
-              type="button"
-              onClick={() => window.print()}
-              disabled={groups.length === 0}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50 disabled:opacity-60"
-              title="Print this Monthly Summary as a conveyance sheet"
-            >
-              Print
-            </button>
+          <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={downloadExcel}
               disabled={downloading || groups.length === 0}
               className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
+              title="Workbook with an overview tab plus one tab per department listing every expense"
             >
               {downloading ? "Preparing…" : "Download Excel"}
             </button>
@@ -1661,6 +1792,7 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
   const [travelType, setTravelType] = useState(row.travel_type || "");
   const [amount, setAmount] = useState(String(row.amount ?? 0));
   const [advance, setAdvance] = useState(String(row.advance ?? 0));
+  const [siteName, setSiteName] = useState(row.site_name || "");
   const [remarks, setRemarks] = useState(row.remarks || "");
 
   useEffect(() => {
@@ -1694,6 +1826,7 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
       travel_type: expenseType === "travel" ? travelType : "",
       amount: amt,
       advance: adv,
+      site_name: siteName.trim(),
       remarks: remarks.trim(),
     });
   }
@@ -1803,6 +1936,18 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
             />
           </Field>
           <div className="sm:col-span-2">
+            <Field label="Site Name (optional)">
+              <input
+                type="text"
+                value={siteName}
+                onChange={(e) => setSiteName(e.target.value)}
+                placeholder="e.g. Nhava Sheva WH, Okhla Custom House"
+                maxLength={255}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
             <Field label="Remarks">
               <textarea
                 value={remarks}
@@ -1831,6 +1976,79 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// Read-only list of every advance HR has recorded across history.
+// Columns: Employee · Advance Amount · Date Given.  Sorted newest first
+// by the API.  Rendered below the grouped admin table.
+function AdvancesTable({ items, isLoading }) {
+  const totalAdvance = (items || []).reduce((s, n) => s + (n.advance || 0), 0);
+  return (
+    <div className="rounded-lg border border-zinc-200 bg-white">
+      <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+        <div>
+          <h3 className="text-sm font-semibold text-zinc-900">Advances</h3>
+          <p className="text-[11px] text-zinc-500">
+            Every advance HR has recorded — newest first.
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-wider text-zinc-500">Total advance</p>
+          <p className="text-sm font-semibold text-zinc-900 tabular-nums">
+            ₹{totalAdvance.toLocaleString("en-IN")}
+          </p>
+        </div>
+      </div>
+      <table className="min-w-full divide-y divide-zinc-100 text-xs">
+        <thead className="bg-zinc-50 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+          <tr>
+            <th className="px-4 py-2">Employee</th>
+            <th className="px-4 py-2 text-right">Advance Amount</th>
+            <th className="px-4 py-2">Date of Given</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-zinc-100">
+          {isLoading ? (
+            <tr>
+              <td colSpan={3} className="px-4 py-6 text-center text-zinc-500">
+                Loading advances…
+              </td>
+            </tr>
+          ) : (items || []).length === 0 ? (
+            <tr>
+              <td colSpan={3} className="px-4 py-6 text-center text-zinc-500">
+                No advances recorded yet.
+              </td>
+            </tr>
+          ) : (
+            items.map((n) => {
+              const period = new Date(n.year, (n.month || 1) - 1, 1)
+                .toLocaleString(undefined, { month: "short", year: "numeric" });
+              const givenDate = n.updated_at
+                ? new Date(n.updated_at).toLocaleDateString(undefined, {
+                    day: "numeric", month: "short", year: "numeric",
+                  })
+                : "—";
+              return (
+                <tr key={`${n.user_id}-${n.year}-${n.month}`} className="hover:bg-zinc-50/60">
+                  <td className="px-4 py-2">
+                    <div className="font-medium text-zinc-900">{n.user_name}</div>
+                    {n.department && (
+                      <div className="text-[10px] text-zinc-500">{n.department} · {period}</div>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-zinc-900">
+                    ₹{(n.advance || 0).toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-4 py-2 text-zinc-700">{givenDate}</td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1983,7 +2201,7 @@ function StatusPill({ status }) {
   );
 }
 
-function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending, deletePending }) {
+function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending, deletePending, hideOnHold }) {
   // billUrls[i] = blob URL for row.bills[i] once fetched, or null while loading.
   const [billUrls, setBillUrls] = useState([]);
   const [openBillIndex, setOpenBillIndex] = useState(-1);  // -1 = closed
@@ -2146,14 +2364,16 @@ function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending
               >
                 {decidePending ? "…" : "Reject"}
               </button>
-              <button
-                type="button"
-                onClick={() => onDecide("onhold", "")}
-                disabled={decidePending}
-                className="rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
-              >
-                {decidePending ? "…" : "On Hold"}
-              </button>
+              {!hideOnHold && (
+                <button
+                  type="button"
+                  onClick={() => onDecide("onhold", "")}
+                  disabled={decidePending}
+                  className="rounded-md border border-sky-300 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                >
+                  {decidePending ? "…" : "On Hold"}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => onDecide("approved", "")}
