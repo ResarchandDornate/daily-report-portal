@@ -23,7 +23,9 @@ import { Table } from "@/components/Table";
 // from the "Total Employees" headline count.  Same departments and people
 // still appear everywhere else (sidebar, department detail, All Employees,
 // etc.) — this is just so the top-card count reflects "reporting employees".
-const NON_REPORTING_DEPTS = new Set(["rd", "finance"]);
+// Finance was previously excluded but HR now wants them counted; R&D stays
+// out because they still don't file daily reports.
+const NON_REPORTING_DEPTS = new Set(["rd"]);
 
 // `useSearchParams()` inside OverviewContent bails the route out of static
 // prerendering — wrap it in <Suspense> so Next.js can prerender a shell and
