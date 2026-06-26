@@ -1115,10 +1115,10 @@ function GroupStatusPill({ pending, onHold, rejected, approved }) {
 
 function StatusMix({ pending, approved, rejected, onHold }) {
   const items = [
-    { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",   label: "P",  title: "Pending"  },
-    { count: onHold,   cls: "bg-sky-50 text-sky-700 ring-sky-200",         label: "OH", title: "On Hold"  },
-    { count: approved, cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "A",  title: "Approved" },
-    { count: rejected, cls: "bg-rose-50 text-rose-700 ring-rose-200",       label: "R",  title: "Rejected" },
+    { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",       label: "Pending"  },
+    { count: onHold,   cls: "bg-sky-50 text-sky-700 ring-sky-200",             label: "On Hold"  },
+    { count: approved, cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "Approved" },
+    { count: rejected, cls: "bg-rose-50 text-rose-700 ring-rose-200",          label: "Rejected" },
   ].filter((i) => i.count > 0);
   if (!items.length) return <span className="text-zinc-400">—</span>;
   return (
@@ -1126,10 +1126,11 @@ function StatusMix({ pending, approved, rejected, onHold }) {
       {items.map((i) => (
         <span
           key={i.label}
-          className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${i.cls}`}
-          title={i.title}
+          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${i.cls}`}
+          title={`${i.label}: ${i.count}`}
         >
-          {i.label}: {i.count}
+          {i.label}
+          <span className="tabular-nums font-semibold">{i.count}</span>
         </span>
       ))}
     </div>
