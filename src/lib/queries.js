@@ -508,3 +508,40 @@ export function useUpdateExpense() {
     onError: (err) => toast.error(err.message || "Failed to update expense"),
   });
 }
+
+// Append new bill files to an existing pending/onhold expense.
+export function useAddExpenseBills() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, files }) => {
+      const fd = new FormData();
+      for (const f of (files || [])) {
+        if (f) fd.append("bills", f);
+      }
+      return api
+        .post(`/api/expenses/${id}/bills`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+        .then((r) => r.data);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Bill(s) added");
+    },
+    onError: (err) => toast.error(err.message || "Failed to add bills"),
+  });
+}
+
+// Remove one attached bill by its position in the expense's bills list.
+export function useDeleteExpenseBill() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, index }) =>
+      api.delete(`/api/expenses/${id}/bill/${index}`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Bill removed");
+    },
+    onError: (err) => toast.error(err.message || "Failed to remove bill"),
+  });
+}
