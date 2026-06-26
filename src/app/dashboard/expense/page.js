@@ -7,6 +7,8 @@ import {
   useCreateExpense,
   useDecideExpense,
   useDeleteExpense,
+  useAddExpenseBills,
+  useDeleteExpenseBill,
   useDepartments,
   useExpenses,
   useMe,
@@ -103,6 +105,8 @@ export default function ExpensePage() {
   const decideExpense = useDecideExpense();
   const deleteExpense = useDeleteExpense();
   const updateExpense = useUpdateExpense();
+  const addBills = useAddExpenseBills();
+  const deleteBill = useDeleteExpenseBill();
 
   // Two-tier modal state for the admin view: first a list of all expenses
   // for one employee, then a per-expense detail modal opened from that list.
@@ -482,13 +486,22 @@ export default function ExpensePage() {
         <EditExpenseModal
           row={editingRow}
           onClose={() => setEditingRow(null)}
-          onSave={async (patch) => {
+          onSave={async (patch, newBills) => {
             try {
               await updateExpense.mutateAsync({ id: editingRow.id, ...patch });
+              // Upload any newly-picked bill files AFTER the field patch
+              // lands.  If the upload fails, the field changes still stuck
+              // and the user sees a toast.
+              if (newBills && newBills.length) {
+                await addBills.mutateAsync({ id: editingRow.id, files: newBills });
+              }
               setEditingRow(null);
             } catch {}
           }}
-          saving={updateExpense.isPending}
+          onDeleteBill={async (index) => {
+            await deleteBill.mutateAsync({ id: editingRow.id, index });
+          }}
+          saving={updateExpense.isPending || addBills.isPending}
         />
       )}
 
@@ -1778,12 +1791,75 @@ function BillCountIndicator({ withBills, total }) {
   );
 }
 
-function EditExpenseModal({ row, onClose, onSave, saving }) {
+// Existing-bill tile shown in the edit modal.  Fetches the bill as a blob
+// URL once, renders an image thumbnail (or a PDF tile), and exposes a ✕
+// button that calls back to the parent to delete it on the server.
+function EditBillThumbnail({ expenseId, index, filename, onRemove }) {
+  const [url, setUrl] = useState(null);
+  const [loadError, setLoadError] = useState(false);
+  const isImage = /\.(jpe?g|png|webp|heic)$/i.test(filename || "");
+  const isPdf = /\.pdf$/i.test(filename || "");
+
+  useEffect(() => {
+    if (!isImage) return;
+    let cancelled = false;
+    let createdUrl = null;
+    (async () => {
+      try {
+        const { api } = await import("@/lib/api");
+        const resp = await api.get(`/api/expenses/${expenseId}/bill/${index}`, {
+          responseType: "blob",
+        });
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(resp.data);
+        setUrl(createdUrl);
+      } catch {
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [expenseId, index, isImage]);
+
+  return (
+    <div
+      className="group relative h-16 w-16 overflow-hidden rounded-md border border-zinc-200 bg-zinc-50"
+      title={filename}
+    >
+      {isImage && url ? (
+        <img src={url} alt={filename} className="h-full w-full object-cover" />
+      ) : isImage && loadError ? (
+        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium text-rose-600">
+          ⚠︎
+        </div>
+      ) : isPdf ? (
+        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium text-zinc-600">
+          PDF
+        </div>
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium text-zinc-500">
+          …
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="absolute right-0.5 top-0.5 rounded-full bg-rose-600/90 px-1.5 text-[10px] font-bold text-white opacity-0 transition-opacity group-hover:opacity-100"
+        aria-label={`Remove ${filename || "bill"}`}
+      >
+        ✕
+      </button>
+    </div>
+  );
+}
+
+function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill }) {
   // Pre-fill from the existing expense — every field stays editable so an
-  // employee can correct any mistake before approval.  Bills are NOT shown
-  // here (they're managed through the new-expense submit + the per-expense
-  // detail view).  Travel km/rate auto-calc is intentionally omitted on edit
-  // — the employee can just type the new amount.
+  // employee can correct any mistake before approval.  Mirrors the create
+  // form: km/rate auto-compute for km-based travel, and a bills section
+  // for adding / removing attachments (which hit dedicated endpoints).
   const [date, setDate] = useState(row.date || todayISO());
   const [mode, setMode] = useState((row.mode || "cash").toLowerCase());
   const [expenseType, setExpenseType] = useState(row.expense_type || "food");
@@ -1791,14 +1867,97 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
   // values (car/bike/cab/rapido) OR the raw sub-mode (bus/auto/metro).  We
   // store whatever the server has so it round-trips cleanly.
   const [travelType, setTravelType] = useState(row.travel_type || "");
+  // Distance + rate auto-compute amount for km-based travel — same logic
+  // as the create form.  Left empty when the saved travel type isn't
+  // km-based; user can still hand-edit the amount.
+  const [kilometers, setKilometers] = useState("");
+  const [ratePerKm, setRatePerKm] = useState("");
   const [amount, setAmount] = useState(String(row.amount ?? 0));
   const [advance, setAdvance] = useState(String(row.advance ?? 0));
   const [siteName, setSiteName] = useState(row.site_name || "");
   const [remarks, setRemarks] = useState(row.remarks || "");
+  // Bills — split into "existing" (already uploaded, indexed) and
+  // "pendingAdds" (newly picked files that upload on save).  Deletes are
+  // immediate (with a confirm), driven by the parent via onDeleteBill.
+  const [existingBills, setExistingBills] = useState(row.bills || []);
+  const [pendingAdds, setPendingAdds] = useState([]);   // File[]
+  const [pendingPreviews, setPendingPreviews] = useState([]);  // { name, url|null }[]
+  useEffect(() => { setExistingBills(row.bills || []); }, [row.bills]);
 
   useEffect(() => {
-    if (expenseType !== "travel" && travelType) setTravelType("");
+    if (expenseType !== "travel") {
+      if (travelType) setTravelType("");
+      if (kilometers) setKilometers("");
+      if (ratePerKm) setRatePerKm("");
+    }
   }, [expenseType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When travel type changes to a km-based one, pre-fill the rate from the
+  // standard PER_KM_RATES table and clear the km input so the user has to
+  // enter the new distance.  Non-km types clear both.
+  useEffect(() => {
+    if (KM_BASED_TYPES.has(travelType)) {
+      setRatePerKm(String(PER_KM_RATES[travelType] ?? 0));
+      setKilometers("");
+    } else {
+      setRatePerKm("");
+      setKilometers("");
+    }
+  }, [travelType]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-compute amount = km × rate whenever either changes — user can
+  // still override the amount manually afterwards (next km/rate change
+  // re-overwrites it, same trade-off as the create form).
+  useEffect(() => {
+    if (!KM_BASED_TYPES.has(travelType)) return;
+    const km = parseFloat(kilometers);
+    const rate = parseFloat(ratePerKm);
+    if (Number.isFinite(km) && Number.isFinite(rate) && km >= 0 && rate >= 0) {
+      setAmount(String(Math.round(km * rate)));
+    }
+  }, [kilometers, ratePerKm, travelType]);
+
+  // Build object-URL previews for newly-picked files (same as create form).
+  useEffect(() => {
+    if (!pendingAdds.length) { setPendingPreviews([]); return; }
+    const next = pendingAdds.map((f) => ({
+      name: f.name,
+      url: f.type?.startsWith("image/") ? URL.createObjectURL(f) : null,
+    }));
+    setPendingPreviews(next);
+    return () => {
+      for (const p of next) {
+        if (p.url) URL.revokeObjectURL(p.url);
+      }
+    };
+  }, [pendingAdds]);
+
+  function addPendingFiles(fileList) {
+    if (!fileList) return;
+    const incoming = Array.from(fileList);
+    if (!incoming.length) return;
+    setPendingAdds((prev) => {
+      const seen = new Set(prev.map((f) => `${f.name}::${f.size}`));
+      const merged = [...prev];
+      for (const f of incoming) {
+        const key = `${f.name}::${f.size}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          merged.push(f);
+        }
+      }
+      // Server cap: existing + pending must stay ≤ 10.
+      const cap = 10 - existingBills.length;
+      if (merged.length > cap) {
+        toast.error(`Max 10 bills per expense — only ${Math.max(0, cap)} more can be added.`);
+        return merged.slice(0, Math.max(0, cap));
+      }
+      return merged;
+    });
+  }
+  function removePendingAt(idx) {
+    setPendingAdds((prev) => prev.filter((_, i) => i !== idx));
+  }
 
   function handleSave(e) {
     e.preventDefault();
@@ -1820,16 +1979,30 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
       toast.error("Pick a travel type before saving.");
       return;
     }
-    onSave({
-      date,
-      mode,
-      expense_type: expenseType,
-      travel_type: expenseType === "travel" ? travelType : "",
-      amount: amt,
-      advance: adv,
-      site_name: siteName.trim(),
-      remarks: remarks.trim(),
-    });
+    // Audit prefix on km-based travel — gives the approver a clear breakdown
+    // of how the amount was derived (km × rate), matching the create form.
+    let finalRemarks = remarks.trim();
+    if (KM_BASED_TYPES.has(travelType) && kilometers && ratePerKm) {
+      const audit = `${kilometers} km × ₹${ratePerKm}/km = ₹${amt}`;
+      // Only prepend if the existing remark doesn't already start with an
+      // audit line (avoids stacking on repeated edits).
+      if (!/^\d+(\.\d+)?\s*km\s*×/.test(finalRemarks)) {
+        finalRemarks = finalRemarks ? `${audit} — ${finalRemarks}` : audit;
+      }
+    }
+    onSave(
+      {
+        date,
+        mode,
+        expense_type: expenseType,
+        travel_type: expenseType === "travel" ? travelType : "",
+        amount: amt,
+        advance: adv,
+        site_name: siteName.trim(),
+        remarks: finalRemarks,
+      },
+      pendingAdds,
+    );
   }
 
   // Show every travel type we accept (including the bus/auto/metro sub-modes
@@ -1916,6 +2089,32 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
               </select>
             </Field>
           )}
+          {expenseType === "travel" && KM_BASED_TYPES.has(travelType) && (
+            <>
+              <Field label="Distance (km)">
+                <input
+                  type="number"
+                  min={0}
+                  step="0.1"
+                  value={kilometers}
+                  onChange={(e) => setKilometers(e.target.value)}
+                  placeholder="0"
+                  className={inputClass}
+                />
+              </Field>
+              <Field label="Rate (₹ / km)">
+                <input
+                  type="number"
+                  min={0}
+                  step="0.5"
+                  value={ratePerKm}
+                  onChange={(e) => setRatePerKm(e.target.value)}
+                  placeholder="0"
+                  className={inputClass}
+                />
+              </Field>
+            </>
+          )}
           <Field label="Amount (₹)">
             <input
               type="number"
@@ -1946,6 +2145,83 @@ function EditExpenseModal({ row, onClose, onSave, saving }) {
                 maxLength={255}
                 className={inputClass}
               />
+            </Field>
+          </div>
+          <div className="sm:col-span-2">
+            <Field label="Bills / Receipts (up to 10 total)">
+              {/* Existing bills — fetched as blob URLs by EditBillThumbnail.
+                  ✕ deletes the bill on the server immediately (with a
+                  confirm). */}
+              {existingBills.length > 0 && (
+                <div className="mb-2 flex flex-wrap gap-2">
+                  {existingBills.map((b, idx) => (
+                    <EditBillThumbnail
+                      key={`${b.filename}-${idx}`}
+                      expenseId={row.id}
+                      index={idx}
+                      filename={b.filename}
+                      onRemove={async () => {
+                        if (!onDeleteBill) return;
+                        if (!confirm(`Remove ${b.filename || "this bill"}?`)) return;
+                        try {
+                          await onDeleteBill(idx);
+                          // Optimistically drop it locally; the parent will
+                          // refresh once the mutation invalidates.
+                          setExistingBills((prev) => prev.filter((_, i) => i !== idx));
+                        } catch {}
+                      }}
+                    />
+                  ))}
+                </div>
+              )}
+              {/* Add-more picker — queued and uploaded on Save. */}
+              <input
+                type="file"
+                accept="image/*,application/pdf"
+                multiple
+                onChange={(e) => {
+                  addPendingFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                className={`${inputClass} cursor-pointer file:mr-2 file:rounded-sm file:border-0 file:bg-orange-100 file:px-2 file:py-0.5 file:text-[11px] file:font-medium file:text-orange-800 hover:file:bg-orange-200`}
+              />
+              {pendingPreviews.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {pendingPreviews.map((p, idx) => (
+                    <div
+                      key={`${p.name}-${idx}`}
+                      className="group relative h-16 w-16 overflow-hidden rounded-md border border-emerald-300 bg-emerald-50"
+                      title={`${p.name} (will upload on save)`}
+                    >
+                      {p.url ? (
+                        <img src={p.url} alt={p.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] font-medium text-emerald-700">
+                          PDF
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removePendingAt(idx)}
+                        className="absolute right-0.5 top-0.5 rounded-full bg-zinc-900/70 px-1.5 text-[10px] font-bold text-white opacity-0 transition-opacity group-hover:opacity-100"
+                        aria-label={`Remove ${p.name}`}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {pendingAdds.length > 0 && (
+                <p className="mt-1 text-[10px] text-emerald-700">
+                  {pendingAdds.length} new file{pendingAdds.length === 1 ? "" : "s"} will upload on save.
+                </p>
+              )}
+              {existingBills.length + pendingAdds.length >= 10 && (
+                <p className="mt-1 text-[10px] text-rose-600">
+                  Max 10 bills reached — remove one before adding more.
+                </p>
+              )}
             </Field>
           </div>
           <div className="sm:col-span-2">
