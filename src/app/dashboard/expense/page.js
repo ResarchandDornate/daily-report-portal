@@ -275,13 +275,10 @@ export default function ExpensePage() {
       {/* Submission form is hidden ONLY for Tarini (review-only account).
           Smita, HR, and all other employees still see the full form. */}
       {!isTariniReviewer && (
-        <ExpenseForm onSubmit={async (payload) => {
-          try {
-            await createExpense.mutateAsync(payload);
-          } catch {
-            /* toast fired by hook */
-          }
-        }} submitting={createExpense.isPending} />
+        <ExpenseForm
+          onSubmit={(payload) => createExpense.mutateAsync(payload)}
+          submitting={createExpense.isPending}
+        />
       )}
 
       {/* Admin view-toggle — HR / Smita can flip between their own
@@ -649,32 +646,38 @@ function ExpenseForm({ onSubmit, submitting }) {
     setBills((prev) => prev.filter((_, i) => i !== idx));
   }
 
-  function handleSubmit(e) {
-    e.preventDefault();
+  // Batch state — users fill the form, click "+ Add" to push the entry
+  // into `drafts`, then click "Submit (N)" once to send all of them.
+  const [drafts, setDrafts] = useState([]);
+  const [submittingAll, setSubmittingAll] = useState(false);
+
+  // Validate the current form values and assemble a payload object.
+  // Returns null and fires a toast when something fails validation.
+  function buildPayload() {
     const amt = parseInt(amount, 10);
     if (!Number.isFinite(amt) || amt < 0) {
       toast.error("Amount must be a non-negative number.");
-      return;
+      return null;
     }
     const adv = parseInt(advance, 10) || 0;
     if (adv < 0) {
       toast.error("Advance must be a non-negative number.");
-      return;
+      return null;
     }
     if (adv > amt) {
       toast.error("Advance can't be larger than the expense amount.");
-      return;
+      return null;
     }
     let finalTravelType = "";
     if (expenseType === "travel") {
       if (!travelType) {
         toast.error("Pick a travel type (car, bike, cab, rapido, or others).");
-        return;
+        return null;
       }
       if (travelType === "other") {
         if (!travelSubtype) {
           toast.error("Pick the sub-mode (bus, auto, metro).");
-          return;
+          return null;
         }
         finalTravelType = travelSubtype;
       } else {
@@ -690,7 +693,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       finalRemarks = finalRemarks ? `${audit} — ${finalRemarks}` : audit;
     }
 
-    onSubmit({
+    return {
       date,
       mode,
       expense_type: expenseType,
@@ -700,21 +703,54 @@ function ExpenseForm({ onSubmit, submitting }) {
       site_name: siteName.trim(),
       remarks: finalRemarks,
       bills,
-    }).then(() => {
-      // Reset form on success — keep date so multiple same-day submissions
-      // are fast.
-      setAmount("");
-      setAdvance("");
-      setSiteName("");
-      setRemarks("");
-      setBills([]);
-      setKilometers("");
-    });
+    };
+  }
+
+  // Clear the entry-form fields (but keep the date so multiple same-day
+  // entries are quick to file).
+  function resetEntryForm() {
+    setAmount("");
+    setAdvance("");
+    setSiteName("");
+    setRemarks("");
+    setBills([]);
+    setKilometers("");
+  }
+
+  function handleAddToBatch(e) {
+    e?.preventDefault();
+    if (submittingAll) return;
+    const payload = buildPayload();
+    if (!payload) return;
+    setDrafts((prev) => [...prev, payload]);
+    resetEntryForm();
+    toast.success("Added to batch");
+  }
+
+  function removeDraftAt(i) {
+    setDrafts((prev) => prev.filter((_, idx) => idx !== i));
+  }
+
+  async function handleSubmitAll() {
+    if (submittingAll || !drafts.length) return;
+    setSubmittingAll(true);
+    const remaining = [];
+    for (const d of drafts) {
+      try {
+        await onSubmit(d);
+      } catch {
+        // Keep the failed draft so the user can fix and retry.  The per-
+        // mutation toast (fired by useCreateExpense) already explains why.
+        remaining.push(d);
+      }
+    }
+    setDrafts(remaining);
+    setSubmittingAll(false);
   }
 
   return (
     <form
-      onSubmit={handleSubmit}
+      onSubmit={handleAddToBatch}
       className="rounded-lg border border-zinc-200 bg-white p-4"
     >
       <h2 className="mb-3 text-sm font-semibold text-zinc-900">New expense</h2>
@@ -904,13 +940,98 @@ function ExpenseForm({ onSubmit, submitting }) {
           </Field>
         </div>
       </div>
-      <div className="mt-3 flex justify-end">
+      {/* Batched draft list — appears once the first "+ Add" has happened.
+          Each row is a queued expense that hasn't been submitted yet; the
+          ✕ button drops it from the batch.  Submitting clears the rows
+          that succeed and keeps any that failed (with their toast). */}
+      {drafts.length > 0 && (
+        <div className="mt-4 rounded-md border border-zinc-200 bg-zinc-50/60">
+          <div className="flex items-center justify-between border-b border-zinc-200 px-3 py-2">
+            <p className="text-xs font-semibold text-zinc-700">
+              Batched expenses ({drafts.length})
+            </p>
+            <p className="text-[10px] text-zinc-500">
+              Click <span className="font-semibold">Submit all</span> to file every row.
+            </p>
+          </div>
+          <table className="min-w-full divide-y divide-zinc-100 text-[11px]">
+            <thead className="bg-white/60 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+              <tr>
+                <th className="px-3 py-1.5">#</th>
+                <th className="px-3 py-1.5">Date</th>
+                <th className="px-3 py-1.5">Type</th>
+                <th className="px-3 py-1.5">Mode</th>
+                <th className="px-3 py-1.5 text-right">Amount</th>
+                <th className="px-3 py-1.5 text-right">Advance</th>
+                <th className="px-3 py-1.5">Site</th>
+                <th className="px-3 py-1.5 text-center">Bills</th>
+                <th className="px-3 py-1.5 text-right" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-zinc-100">
+              {drafts.map((d, i) => (
+                <tr key={i} className="bg-white">
+                  <td className="px-3 py-1.5 text-zinc-500">{i + 1}</td>
+                  <td className="px-3 py-1.5 whitespace-nowrap text-zinc-700">
+                    {d.date}
+                  </td>
+                  <td className="px-3 py-1.5 capitalize text-zinc-700">
+                    {d.expense_type}
+                    {d.travel_type ? ` · ${d.travel_type}` : ""}
+                  </td>
+                  <td className="px-3 py-1.5 capitalize text-zinc-700">
+                    {d.mode || "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-zinc-900">
+                    ₹{(d.amount || 0).toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-3 py-1.5 text-right tabular-nums text-zinc-700">
+                    {d.advance > 0 ? `₹${d.advance.toLocaleString("en-IN")}` : "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-zinc-700">
+                    {d.site_name || "—"}
+                  </td>
+                  <td className="px-3 py-1.5 text-center text-zinc-700">
+                    {d.bills?.length || 0}
+                  </td>
+                  <td className="px-3 py-1.5 text-right">
+                    <button
+                      type="button"
+                      onClick={() => removeDraftAt(i)}
+                      disabled={submittingAll}
+                      className="rounded-md px-1.5 py-0.5 text-[11px] font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40"
+                      aria-label={`Remove row ${i + 1}`}
+                    >
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="mt-3 flex items-center justify-end gap-2">
         <button
           type="submit"
-          disabled={submitting}
+          disabled={submitting || submittingAll}
+          className="rounded-md border border-orange-600 bg-white px-4 py-1.5 text-xs font-semibold text-orange-700 hover:bg-orange-50 disabled:opacity-60"
+          title="Add this entry to the batch — clears the form so you can fill the next one"
+        >
+          + Add to batch
+        </button>
+        <button
+          type="button"
+          onClick={handleSubmitAll}
+          disabled={submittingAll || submitting || drafts.length === 0}
           className="rounded-md bg-orange-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-orange-700 disabled:opacity-60"
         >
-          {submitting ? "Submitting…" : "Submit expense"}
+          {submittingAll
+            ? `Submitting ${drafts.length}…`
+            : drafts.length > 0
+              ? `Submit all (${drafts.length})`
+              : "Submit all"}
         </button>
       </div>
     </form>
@@ -2300,26 +2421,47 @@ function AdvancesTable({ items, isLoading }) {
               </td>
             </tr>
           ) : (
-            items.map((n) => {
-              const period = new Date(n.year, (n.month || 1) - 1, 1)
-                .toLocaleString(undefined, { month: "short", year: "numeric" });
+            items.map((n, i) => {
+              const period = n.year && n.month
+                ? new Date(n.year, (n.month || 1) - 1, 1)
+                    .toLocaleString(undefined, { month: "short", year: "numeric" })
+                : "";
               const givenDate = n.updated_at
                 ? new Date(n.updated_at).toLocaleDateString(undefined, {
                     day: "numeric", month: "short", year: "numeric",
                   })
                 : "—";
+              const isExpense = n.source === "expense";
+              // Stable key — expense rows carry expense_id; monthly notes
+              // are unique by (user, year, month).  Falls back to the
+              // array index so React never throws "duplicate key".
+              const rowKey = isExpense
+                ? `e-${n.expense_id}`
+                : `m-${n.user_id}-${n.year}-${n.month}-${i}`;
               return (
-                <tr key={`${n.user_id}-${n.year}-${n.month}`} className="hover:bg-zinc-50/60">
+                <tr key={rowKey} className="hover:bg-zinc-50/60">
                   <td className="px-4 py-2">
                     <div className="font-medium text-zinc-900">{n.user_name}</div>
-                    {n.department && (
-                      <div className="text-[10px] text-zinc-500">{n.department} · {period}</div>
+                    {(n.department || period) && (
+                      <div className="text-[10px] text-zinc-500">
+                        {[n.department, period].filter(Boolean).join(" · ")}
+                        {isExpense && n.expense_type && (
+                          <> · <span className="capitalize">{n.expense_type}</span></>
+                        )}
+                      </div>
                     )}
                   </td>
                   <td className="px-4 py-2 text-right tabular-nums font-semibold text-zinc-900">
                     ₹{(n.advance || 0).toLocaleString("en-IN")}
                   </td>
-                  <td className="px-4 py-2 text-zinc-700">{givenDate}</td>
+                  <td className="px-4 py-2 text-zinc-700">
+                    {givenDate}
+                    {isExpense && (
+                      <span className="ml-1.5 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-zinc-600">
+                        Expense
+                      </span>
+                    )}
+                  </td>
                 </tr>
               );
             })
