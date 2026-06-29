@@ -48,8 +48,21 @@ export default function DashboardLayout({ children }) {
       (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
     );
   })();
+  // Tarini is review-only and doesn't file her own daily report — hide
+  // the My Daily Report nav for her and bounce her if she navigates there
+  // directly (her role is "hr", so the regular route guard below would
+  // skip her).
+  const isTarini = (() => {
+    if (!me) return false;
+    const local = (me.email || "").toLowerCase().split("@")[0];
+    return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
+  })();
   useEffect(() => {
     if (!me) return;
+    if (isTarini && pathname === "/dashboard/my-report") {
+      router.replace("/dashboard");
+      return;
+    }
     if (me.role === "hr") return;
     const employeePaths = [
       "/dashboard",
@@ -158,6 +171,8 @@ export default function DashboardLayout({ children }) {
     // Approver-gated items: HR always sees them; non-HR only when they're
     // a named approver (Tarini / Smita).
     if (n.requiresApprover && me.role !== "hr" && !isNamedApprover) return false;
+    // Tarini doesn't file her own daily report — hide that link from her.
+    if (isTarini && n.href === "/dashboard/my-report") return false;
     return true;
   });
   const meName = fullName(me);

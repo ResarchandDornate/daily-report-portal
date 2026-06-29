@@ -9,6 +9,7 @@ import {
   useDeleteExpense,
   useAddExpenseBills,
   useDeleteExpenseBill,
+  useMarkPaidExpense,
   useDepartments,
   useExpenses,
   useMe,
@@ -85,12 +86,27 @@ function _isTariniEmail(email) {
   return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
 }
 
+// Finance approver (Shivangi) — the only account that can mark an
+// approved expense as paid.  Same prefix-match style as the others so
+// `shivangi.singh@…` etc. still resolve.
+function _isFinanceApproverEmail(email) {
+  const local = (email || "").trim().toLowerCase().split("@")[0] || "";
+  return local === "shivangi" || local.startsWith("shivangi.") || local.startsWith("shivangi_");
+}
+
 export default function ExpensePage() {
   const { data: me } = useMe();
+  // Shivangi gets the admin (cross-employee) view too — she needs to see
+  // every approved expense to mark each one paid.
+  const isFinanceApprover = useMemo(() => {
+    if (!me) return false;
+    return _isFinanceApproverEmail(me.email);
+  }, [me]);
   const isAdmin = useMemo(() => {
     if (!me) return false;
     if (me.role === "hr") return true;
-    return _isApproverEmail(me.email);
+    if (_isApproverEmail(me.email)) return true;
+    return _isFinanceApproverEmail(me.email);
   }, [me]);
   // Tarini's account is review-only — she doesn't file her own expenses
   // through this form.  Smita + HR still get the form because they can.
@@ -107,6 +123,7 @@ export default function ExpensePage() {
   const updateExpense = useUpdateExpense();
   const addBills = useAddExpenseBills();
   const deleteBill = useDeleteExpenseBill();
+  const markPaid = useMarkPaidExpense();
 
   // Two-tier modal state for the admin view: first a list of all expenses
   // for one employee, then a per-expense detail modal opened from that list.
@@ -123,7 +140,28 @@ export default function ExpensePage() {
   // Default to "all months" so the admin sees every employee's complete total
   // on first open.  They can narrow by month using the dropdown.
   const [monthFilter, setMonthFilter] = useState("all");
-  const [statusFilter, setStatusFilter] = useState("all");   // "pending" | "approved" | "rejected" | "onhold" | "all"
+  // Shivangi opens the page focused on the disbursal queue, so default
+  // her status filter to "approved" (her Paid button targets approved
+  // rows).  Everyone else starts on "all".
+  const [statusFilter, setStatusFilter] = useState(() => {
+    if (typeof window === "undefined") return "all";
+    return "all";
+  });
+  // One-shot effect: when `me` first arrives and the caller is the
+  // finance approver, switch the filter to "approved".  Keeps the
+  // initial render deterministic (SSR-safe) and avoids re-overriding
+  // whatever the user picks afterwards.
+  const financeFilterSetRef = useState({ set: false })[0];
+  useEffect(() => {
+    if (!me) return;
+    if (financeFilterSetRef.set) return;
+    if (_isFinanceApproverEmail(me.email)) {
+      setStatusFilter("approved");
+      financeFilterSetRef.set = true;
+    } else {
+      financeFilterSetRef.set = true;
+    }
+  }, [me, financeFilterSetRef]);
   // Admin view-toggle.  HR / Smita can both file their own expenses AND
   // approve others', so they need a way to swap between:
   //   "all"  — the admin grouped table across the company
@@ -284,9 +322,10 @@ export default function ExpensePage() {
         </div>
       </header>
 
-      {/* Submission form is hidden ONLY for Tarini (review-only account).
-          Smita, HR, and all other employees still see the full form. */}
-      {!isTariniReviewer && (
+      {/* Submission form is hidden for review-only accounts — Tarini and
+          Shivangi neither file their own expenses through this form.
+          Smita, HR, and every regular employee still see the full form. */}
+      {!isTariniReviewer && !isFinanceApprover && (
         <ExpenseForm
           onSubmit={(payload) => createExpense.mutateAsync(payload)}
           submitting={createExpense.isPending}
@@ -379,6 +418,7 @@ export default function ExpensePage() {
               <option value="pending">Pending</option>
               <option value="onhold">On Hold</option>
               <option value="approved">Approved</option>
+              <option value="paid">Paid</option>
               <option value="rejected">Rejected</option>
             </select>
             {(search || deptFilter !== "all" || monthFilter !== "all" || statusFilter !== "all") && (
@@ -434,6 +474,23 @@ export default function ExpensePage() {
           decidePending={decideExpense.isPending}
           hideOnHold={isTariniReviewer}
           monthFilter={monthFilter}
+          isFinanceApprover={isFinanceApprover}
+          markPaidPending={markPaid.isPending}
+          onBatchMarkPaid={async (group) => {
+            const approvedRows = group.expenses.filter((e) => e.status === "approved");
+            if (!approvedRows.length) return;
+            if (!confirm(
+              `Mark all ${approvedRows.length} approved expense(s) for `
+              + `${group.userName} as PAID?  This can't be undone.`,
+            )) return;
+            for (const e of approvedRows) {
+              try {
+                await markPaid.mutateAsync(e.id);
+              } catch {
+                /* per-row toast fired by the hook */
+              }
+            }
+          }}
           onOpenEmployee={(group) => {
             // Rebuild the group from ALL raw (unfiltered) expenses for this
             // user so the modal always shows the employee's complete history,
@@ -448,6 +505,7 @@ export default function ExpensePage() {
               approvedCount: all.filter((e) => e.status === "approved").length,
               rejectedCount: all.filter((e) => e.status === "rejected").length,
               onHoldCount: all.filter((e) => e.status === "onhold").length,
+              paidCount: all.filter((e) => e.status === "paid").length,
               withBillsCount: all.filter((e) => (e.bills || []).length > 0).length,
             });
           }}
@@ -558,6 +616,17 @@ export default function ExpensePage() {
           }}
           decidePending={decideExpense.isPending}
           deletePending={deleteExpense.isPending}
+          // Mark-paid is wired only when the caller is the finance approver
+          // — Shivangi clicking through to a single approved row needs the
+          // same Paid action as the batch one on the grouped table.
+          onMarkPaid={isFinanceApprover ? async () => {
+            if (!confirm("Mark this approved expense as PAID? This can't be undone.")) return;
+            try {
+              await markPaid.mutateAsync(openModal.id);
+              setOpenModal(null);
+            } catch {}
+          } : undefined}
+          markPaidPending={markPaid.isPending}
         />
       )}
 
@@ -1090,6 +1159,7 @@ function groupExpensesByUser(expenses) {
         approvedCount: 0,
         rejectedCount: 0,
         onHoldCount: 0,
+        paidCount: 0,
         withBillsCount: 0,
         latestExpenseDate: e.date,
         latestSubmitAt: e.created_at,
@@ -1103,6 +1173,7 @@ function groupExpensesByUser(expenses) {
     else if (e.status === "approved") g.approvedCount += 1;
     else if (e.status === "rejected") g.rejectedCount += 1;
     else if (e.status === "onhold") g.onHoldCount += 1;
+    else if (e.status === "paid") g.paidCount += 1;
     if ((e.bills || []).length > 0) g.withBillsCount += 1;
     if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
     if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
@@ -1114,7 +1185,7 @@ function groupExpensesByUser(expenses) {
   });
 }
 
-function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter }) {
+function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, onBatchMarkPaid, markPaidPending }) {
   const groups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
   // Totals across whatever the parent has already filtered to (usually the
   // current month).  Shown as a footer row so the user can see the visible
@@ -1193,6 +1264,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   onHold={g.onHoldCount}
                   rejected={g.rejectedCount}
                   approved={g.approvedCount}
+                  paid={g.paidCount}
                 />
               </Table.Td>
               <Table.Td>
@@ -1204,7 +1276,31 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   : "—"}
               </Table.Td>
               <Table.Td className="text-right">
-                {g.pendingCount > 0 ? (
+                {isFinanceApprover ? (
+                  // Finance approver (Shivangi) sees a single batch Paid
+                  // action that fires for every approved expense in this
+                  // employee's group.  No approve / reject controls.
+                  g.approvedCount > 0 ? (
+                    <div
+                      className="flex items-center justify-end gap-1.5"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        disabled={markPaidPending}
+                        onClick={() => onBatchMarkPaid(g)}
+                        className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                        title={`Mark ${g.approvedCount} approved expense(s) as paid`}
+                      >
+                        Paid ({g.approvedCount})
+                      </button>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-zinc-400">
+                      {g.expenses.some((e) => e.status === "paid") ? "All paid" : "Nothing approved"}
+                    </span>
+                  )
+                ) : g.pendingCount > 0 ? (
                   <div
                     className="flex items-center justify-end gap-1.5"
                     onClick={(e) => e.stopPropagation()}
@@ -1267,16 +1363,18 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   );
 }
 
-function GroupStatusPill({ pending, onHold, rejected, approved }) {
+function GroupStatusPill({ pending, onHold, rejected, approved, paid }) {
   // Show a single status label for an employee's expense group, picking
   // the MOST URGENT state across all their expenses.  Priority:
-  //   Pending  >  On Hold  >  Rejected  >  Approved
-  // (Pending is most urgent because HR has to act on it.)
+  //   Pending  >  On Hold  >  Rejected  >  Approved  >  Paid
+  // (Pending is most urgent because HR has to act on it; Paid is shown
+  // last because it's terminal and only appears when nothing else does.)
   let status;
   if (pending > 0)       status = "pending";
   else if (onHold > 0)   status = "onhold";
   else if (rejected > 0) status = "rejected";
   else if (approved > 0) status = "approved";
+  else if (paid > 0)     status = "paid";
   else return <span className="text-zinc-400">—</span>;
   return <StatusPill status={status} />;
 }
@@ -2664,11 +2762,13 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
 
 function StatusPill({ status }) {
   const cls =
-    status === "approved" ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+    status === "paid"     ? "bg-violet-50 text-violet-700 ring-violet-200"
+    : status === "approved" ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
     : status === "rejected" ? "bg-rose-50 text-rose-700 ring-rose-200"
     : status === "onhold"   ? "bg-sky-50 text-sky-700 ring-sky-200"
     : "bg-amber-50 text-amber-800 ring-amber-200";
-  const label = status === "approved" ? "Approved"
+  const label = status === "paid" ? "Paid"
+    : status === "approved" ? "Approved"
     : status === "rejected" ? "Rejected"
     : status === "onhold"   ? "On Hold"
     : "Pending";
@@ -2679,7 +2779,7 @@ function StatusPill({ status }) {
   );
 }
 
-function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending, deletePending, hideOnHold }) {
+function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending, deletePending, hideOnHold, onMarkPaid, markPaidPending }) {
   // billUrls[i] = blob URL for row.bills[i] once fetched, or null while loading.
   const [billUrls, setBillUrls] = useState([]);
   const [openBillIndex, setOpenBillIndex] = useState(-1);  // -1 = closed
@@ -2861,6 +2961,17 @@ function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending
                 {decidePending ? "…" : "Approve"}
               </button>
             </div>
+          )}
+          {onMarkPaid && row.status === "approved" && (
+            <button
+              type="button"
+              onClick={() => onMarkPaid()}
+              disabled={markPaidPending}
+              className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+              title="Mark this approved expense as Paid — terminal, can't be undone"
+            >
+              {markPaidPending ? "Marking…" : "Mark Paid"}
+            </button>
           )}
         </div>
       </div>

@@ -532,6 +532,21 @@ export function useAddExpenseBills() {
   });
 }
 
+// Finance approver (Shivangi) marks an approved expense as paid.  Server
+// enforces both the role gate and the "must be currently approved" check.
+export function useMarkPaidExpense() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) =>
+      api.post(`/api/expenses/${id}/mark-paid`).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Marked as paid");
+    },
+    onError: (err) => toast.error(err.message || "Failed to mark paid"),
+  });
+}
+
 // Remove one attached bill by its position in the expense's bills list.
 export function useDeleteExpenseBill() {
   const qc = useQueryClient();
