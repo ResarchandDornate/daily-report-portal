@@ -72,6 +72,14 @@ function Td({ children, className = "", ...props }) {
   return <td className={`px-3 py-2.5 align-middle ${className}`} {...props}>{children}</td>;
 }
 
+function Foot({ children }) {
+  return (
+    <tfoot className="sticky bottom-0 z-10 bg-orange-50 shadow-[inset_0_1px_0_rgb(228_228_231)]">
+      {children}
+    </tfoot>
+  );
+}
+
 function Empty({ message, colSpan = 1 }) {
   return (
     <tr>
@@ -84,6 +92,7 @@ function Empty({ message, colSpan = 1 }) {
 
 Table.Head = Head;
 Table.Body = Body;
+Table.Foot = Foot;
 Table.Row = Row;
 Table.Th = Th;
 Table.Td = Td;
