@@ -120,13 +120,9 @@ export default function ExpensePage() {
   // Admin-only filter bar state.  All four start as "no filter".
   const [search, setSearch] = useState("");
   const [deptFilter, setDeptFilter] = useState("all");
-  // Default the month filter to the CURRENT month so admins open the page
-  // already focused on this month's expenses.  They can flip back to "All
-  // months" via the dropdown.
-  const [monthFilter, setMonthFilter] = useState(() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  });
+  // Default to "all months" so the admin sees every employee's complete total
+  // on first open.  They can narrow by month using the dropdown.
+  const [monthFilter, setMonthFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");   // "pending" | "approved" | "rejected" | "onhold" | "all"
   // Admin view-toggle.  HR / Smita can both file their own expenses AND
   // approve others', so they need a way to swap between:
@@ -135,30 +131,46 @@ export default function ExpensePage() {
   // Tarini (review-only) sticks to "all" by default but can also flip.
   const [viewMode, setViewMode] = useState("all");           // "all" | "mine"
 
-  // All advances HR has recorded across history — drives the "Advances"
-  // panel below the grouped admin table.  Refetched after the Monthly
-  // Summary modal closes (HR edits advances in there).
-  const [advancesList, setAdvancesList] = useState([]);
-  const [advancesLoading, setAdvancesLoading] = useState(false);
-  useEffect(() => {
-    if (!isAdmin || viewMode !== "all") return;
-    if (monthlyOpen) return;  // skip while modal is open — refetch on close
-    let cancelled = false;
-    setAdvancesLoading(true);
-    (async () => {
-      try {
-        const { api } = await import("@/lib/api");
-        const resp = await api.get("/api/expenses/advances");
-        if (cancelled) return;
-        setAdvancesList(resp.data?.items || []);
-      } catch {
-        if (!cancelled) setAdvancesList([]);
-      } finally {
-        if (!cancelled) setAdvancesLoading(false);
+  // Advance summary derived from the raw expense list — no separate API call.
+  // Pass 1: accumulate ALL expenses per user (amount + latest date).
+  // Pass 2: accumulate only the advance fields.
+  // This ensures totalAmount = the employee's full expense total, and
+  // net = totalAmount - totalAdvance matches what the modal shows.
+  const advanceSummary = useMemo(() => {
+    if (!isAdmin) return [];
+    const byUser = new Map();
+    for (const e of rawExpenses) {
+      if (!byUser.has(e.user_id)) {
+        byUser.set(e.user_id, {
+          userId: e.user_id,
+          userName: e.user_name || "—",
+          department: e.user_department || "",
+          totalAdvance: 0,
+          totalAmount: 0,
+          pendingAdv: 0,
+          approvedAdv: 0,
+          advExpCount: 0,
+          latestDate: e.date || "",
+        });
       }
-    })();
-    return () => { cancelled = true; };
-  }, [isAdmin, viewMode, monthlyOpen]);
+      const g = byUser.get(e.user_id);
+      // Always sum full expense amount and track latest date.
+      g.totalAmount += (e.amount || 0);
+      if ((e.date || "") > g.latestDate) g.latestDate = e.date;
+      // Only count advance where it's actually set.
+      const adv = e.advance || 0;
+      if (adv > 0) {
+        g.totalAdvance += adv;
+        g.advExpCount  += 1;
+        if (e.status === "pending" || e.status === "onhold") g.pendingAdv  += adv;
+        else if (e.status === "approved")                    g.approvedAdv += adv;
+      }
+    }
+    // Only show employees who actually have an advance on at least one expense.
+    return Array.from(byUser.values())
+      .filter((g) => g.totalAdvance > 0)
+      .sort((a, b) => b.totalAdvance - a.totalAdvance);
+  }, [rawExpenses, isAdmin]);
 
   // Current month's HR remark for the LOGGED-IN user — shown as a banner
   // on the employee's My Expenses view so they know if payment is on hold
@@ -425,7 +437,23 @@ export default function ExpensePage() {
           decidePending={decideExpense.isPending}
           hideOnHold={isTariniReviewer}
           monthFilter={monthFilter}
-          onOpenEmployee={(group) => setEmpModal(group)}
+          onOpenEmployee={(group) => {
+            // Rebuild the group from ALL raw (unfiltered) expenses for this
+            // user so the modal always shows the employee's complete history,
+            // regardless of what month filter is active in the admin table.
+            const all = rawExpenses.filter((e) => e.user_id === group.userId);
+            setEmpModal({
+              ...group,
+              expenses: all.slice().sort((a, b) => (a.date < b.date ? 1 : -1)),
+              total: all.reduce((s, e) => s + (e.amount || 0), 0),
+              advance: all.reduce((s, e) => s + (e.advance || 0), 0),
+              pendingCount: all.filter((e) => e.status === "pending").length,
+              approvedCount: all.filter((e) => e.status === "approved").length,
+              rejectedCount: all.filter((e) => e.status === "rejected").length,
+              onHoldCount: all.filter((e) => e.status === "onhold").length,
+              withBillsCount: all.filter((e) => (e.bills || []).length > 0).length,
+            });
+          }}
           onBatchDecide={async (group, decision) => {
             const pending = group.expenses.filter((e) => e.status === "pending");
             if (!pending.length) return;
@@ -466,18 +494,24 @@ export default function ExpensePage() {
         />
       )}
 
-      {/* Advances panel — shown below the grouped admin table.  Lists every
-          advance HR has recorded (across all months), newest first. */}
+      {/* Advances panel — per-employee advance totals derived from expense rows. */}
       {isAdmin && viewMode === "all" && (
-        <AdvancesTable items={advancesList} isLoading={advancesLoading} />
+        <AdvancesTable items={advanceSummary} />
       )}
 
       {/* Admin: per-employee modal listing every expense inline (with
-          clickable bill thumbnails — no separate "Open" detail step). */}
+          clickable bill thumbnails and per-row approve/reject). */}
       {empModal && (
         <EmployeeExpensesModal
           group={empModal}
           onClose={() => setEmpModal(null)}
+          onDecide={async (id, decision) => {
+            try {
+              await decideExpense.mutateAsync({ id, decision, note: "" });
+            } catch {}
+          }}
+          decidePending={decideExpense.isPending}
+          hideOnHold={isTariniReviewer}
         />
       )}
 
@@ -987,7 +1021,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   // layout doesn't jump as rows are added.  Scrolls vertically once the
   // body grows past this height.
   return (
-    <Table maxHeight={420}>
+    <Table maxHeight={600}>
       <Table.Head>
         <Table.Row>
           <Table.Th>Date</Table.Th>
@@ -1088,10 +1122,10 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
             </Table.Row>
           ))
         )}
-        {/* Footer total — sums across whatever's currently visible (default
-            is the current month, so this reads as "Total for June 2026"). */}
-        {!isLoading && groups.length > 0 && (
-          <Table.Row className="bg-orange-50/60 font-semibold">
+      </Table.Body>
+      {!isLoading && groups.length > 0 && (
+        <Table.Foot>
+          <Table.Row className="font-semibold">
             <Table.Td className="whitespace-nowrap text-zinc-900" colSpan={2}>
               Total for {monthLabel} · {groups.length} employee{groups.length === 1 ? "" : "s"}
             </Table.Td>
@@ -1106,8 +1140,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
             </Table.Td>
             <Table.Td colSpan={4} />
           </Table.Row>
-        )}
-      </Table.Body>
+        </Table.Foot>
+      )}
     </Table>
   );
 }
@@ -1150,7 +1184,7 @@ function StatusMix({ pending, approved, rejected, onHold }) {
   );
 }
 
-function EmployeeExpensesModal({ group, onClose }) {
+function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOnHold }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -1229,6 +1263,7 @@ function EmployeeExpensesModal({ group, onClose }) {
                 <Table.Th>Status</Table.Th>
                 <Table.Th>Bill</Table.Th>
                 <Table.Th>Remarks</Table.Th>
+                {onDecide && <Table.Th className="text-right">Action</Table.Th>}
               </Table.Row>
             </Table.Head>
             <Table.Body>
@@ -1266,16 +1301,52 @@ function EmployeeExpensesModal({ group, onClose }) {
                   <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
                     {r.remarks || "—"}
                   </Table.Td>
+                  {onDecide && (
+                    <Table.Td className="text-right">
+                      {r.status === "pending" ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            disabled={decidePending}
+                            onClick={() => onDecide(r.id, "rejected")}
+                            className="rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                          >
+                            Reject
+                          </button>
+                          {!hideOnHold && (
+                            <button
+                              type="button"
+                              disabled={decidePending}
+                              onClick={() => onDecide(r.id, "onhold")}
+                              className="rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                            >
+                              Hold
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={decidePending}
+                            onClick={() => onDecide(r.id, "approved")}
+                            className="rounded-md bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            Approve
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-zinc-400 capitalize">{r.status}</span>
+                      )}
+                    </Table.Td>
+                  )}
                 </Table.Row>
               ))}
-              {/* Subtotal row — sums Amount + Advance, then shows net.  Site
-                  column is rolled into the leading label colSpan. */}
-              {(() => {
-                const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
-                const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
-                const totalNet = Math.max(0, totalAmt - totalAdv);
-                return (
-                  <Table.Row className="bg-orange-50/60 font-semibold">
+            </Table.Body>
+            {(() => {
+              const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
+              const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
+              const totalNet = Math.max(0, totalAmt - totalAdv);
+              return (
+                <Table.Foot>
+                  <Table.Row className="font-semibold">
                     <Table.Td className="text-zinc-900" colSpan={4}>
                       Subtotal · {group.expenses.length} expense{group.expenses.length === 1 ? "" : "s"}
                     </Table.Td>
@@ -1288,11 +1359,11 @@ function EmployeeExpensesModal({ group, onClose }) {
                     <Table.Td className="text-right tabular-nums text-emerald-700">
                       ₹{totalNet.toLocaleString("en-IN")}
                     </Table.Td>
-                    <Table.Td colSpan={3} />
+                    <Table.Td colSpan={onDecide ? 4 : 3} />
                   </Table.Row>
-                );
-              })()}
-            </Table.Body>
+                </Table.Foot>
+              );
+            })()}
           </Table>
         </div>
       </div>
@@ -1308,10 +1379,6 @@ function EmployeeExpensesModal({ group, onClose }) {
 }
 
 function BillThumbnail({ expense, onOpen }) {
-  // Renders a small (32px) image preview of the FIRST attached bill.
-  // The bytes are fetched once on mount and cached as a blob URL.  Clicking
-  // the thumbnail surfaces the full-screen image to the parent via
-  // `onOpen(url, filename)`.  PDFs fall back to a generic 📄 tile.
   const [url, setUrl] = useState(null);
   const [loadError, setLoadError] = useState(false);
   const bills = expense.bills || [];
@@ -1320,8 +1387,9 @@ function BillThumbnail({ expense, onOpen }) {
   const isImage = /\.(jpe?g|png|webp|heic)$/i.test(firstName);
   const isPdf = /\.pdf$/i.test(firstName);
 
+  // Fetch blob URL for images AND PDFs so clicking always works.
   useEffect(() => {
-    if (!billCount || !isImage) return;
+    if (!billCount || (!isImage && !isPdf)) return;
     let cancelled = false;
     let createdUrl = null;
     (async () => {
@@ -1341,7 +1409,7 @@ function BillThumbnail({ expense, onOpen }) {
       cancelled = true;
       if (createdUrl) URL.revokeObjectURL(createdUrl);
     };
-  }, [expense.id, billCount, isImage]);
+  }, [expense.id, billCount, isImage, isPdf]);
 
   if (!billCount) {
     return (
@@ -1360,15 +1428,12 @@ function BillThumbnail({ expense, onOpen }) {
     <button
       type="button"
       onClick={(e) => {
-        // Don't bubble up to the parent Table.Row's onClick — for the
-        // admin flat-table that would open the per-expense detail modal
-        // unintentionally.
         e.stopPropagation();
         if (url) onOpen(url, firstName);
       }}
       disabled={!url}
-      title={`${billCount} bill${billCount === 1 ? "" : "s"} — click to enlarge`}
-      className="group relative h-9 w-9 overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 transition hover:border-orange-300 hover:bg-orange-50 disabled:cursor-default"
+      title={`${billCount} bill${billCount === 1 ? "" : "s"} — click to view`}
+      className="group relative h-9 w-9 overflow-hidden rounded-md border border-zinc-200 bg-zinc-50 transition hover:border-orange-300 hover:bg-orange-50 disabled:cursor-default disabled:opacity-60"
     >
       {url && isImage ? (
         <img src={url} alt="" className="h-full w-full object-cover" />
@@ -2257,18 +2322,18 @@ function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill }) {
   );
 }
 
-// Read-only list of every advance HR has recorded across history.
-// Columns: Employee · Advance Amount · Date Given.  Sorted newest first
-// by the API.  Rendered below the grouped admin table.
-function AdvancesTable({ items, isLoading }) {
-  const totalAdvance = (items || []).reduce((s, n) => s + (n.advance || 0), 0);
+// Per-employee advance summary — derived from expense rows (not MonthlyExpenseNote).
+// Shows every employee who has a non-zero advance on at least one expense, with
+// a breakdown of how much is pending vs approved.
+function AdvancesTable({ items }) {
+  const totalAdvance = (items || []).reduce((s, g) => s + (g.totalAdvance || 0), 0);
   return (
     <div className="rounded-lg border border-zinc-200 bg-white">
       <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
         <div>
           <h3 className="text-sm font-semibold text-zinc-900">Advances</h3>
           <p className="text-[11px] text-zinc-500">
-            Every advance HR has recorded — newest first.
+            Per-employee advance totals from all expense records.
           </p>
         </div>
         <div className="text-right">
@@ -2282,44 +2347,59 @@ function AdvancesTable({ items, isLoading }) {
         <thead className="bg-zinc-50 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
           <tr>
             <th className="px-4 py-2">Employee</th>
-            <th className="px-4 py-2 text-right">Advance Amount</th>
-            <th className="px-4 py-2">Date of Given</th>
+            <th className="px-4 py-2 text-right">Total Expense</th>
+            <th className="px-4 py-2 text-right">Total Advance</th>
+            <th className="px-4 py-2 text-right">Net Payable</th>
+            <th className="px-4 py-2">Status</th>
+            <th className="px-4 py-2">Latest Expense</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100">
-          {isLoading ? (
+          {(items || []).length === 0 ? (
             <tr>
-              <td colSpan={3} className="px-4 py-6 text-center text-zinc-500">
-                Loading advances…
-              </td>
-            </tr>
-          ) : (items || []).length === 0 ? (
-            <tr>
-              <td colSpan={3} className="px-4 py-6 text-center text-zinc-500">
-                No advances recorded yet.
+              <td colSpan={6} className="px-4 py-6 text-center text-zinc-500">
+                No advances recorded on any expense yet.
               </td>
             </tr>
           ) : (
-            items.map((n) => {
-              const period = new Date(n.year, (n.month || 1) - 1, 1)
-                .toLocaleString(undefined, { month: "short", year: "numeric" });
-              const givenDate = n.updated_at
-                ? new Date(n.updated_at).toLocaleDateString(undefined, {
-                    day: "numeric", month: "short", year: "numeric",
-                  })
-                : "—";
+            items.map((g) => {
+              const net = Math.max(0, g.totalAmount - g.totalAdvance);
               return (
-                <tr key={`${n.user_id}-${n.year}-${n.month}`} className="hover:bg-zinc-50/60">
+                <tr key={g.userId} className="hover:bg-zinc-50/60">
                   <td className="px-4 py-2">
-                    <div className="font-medium text-zinc-900">{n.user_name}</div>
-                    {n.department && (
-                      <div className="text-[10px] text-zinc-500">{n.department} · {period}</div>
+                    <div className="font-medium text-zinc-900">{g.userName}</div>
+                    {g.department && (
+                      <div className="text-[10px] text-zinc-500">
+                        {g.department} · {g.advExpCount} expense{g.advExpCount === 1 ? "" : "s"} with advance
+                      </div>
                     )}
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-zinc-900">
-                    ₹{(n.advance || 0).toLocaleString("en-IN")}
+                  <td className="px-4 py-2 text-right tabular-nums text-zinc-700">
+                    ₹{g.totalAmount.toLocaleString("en-IN")}
                   </td>
-                  <td className="px-4 py-2 text-zinc-700">{givenDate}</td>
+                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-zinc-900">
+                    ₹{g.totalAdvance.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-emerald-700">
+                    ₹{net.toLocaleString("en-IN")}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {g.pendingAdv > 0 && (
+                        <span className="inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-amber-200 text-amber-800">
+                          Pending ₹{g.pendingAdv.toLocaleString("en-IN")}
+                        </span>
+                      )}
+                      {g.approvedAdv > 0 && (
+                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-emerald-200 text-emerald-700">
+                          Approved ₹{g.approvedAdv.toLocaleString("en-IN")}
+                        </span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-2 text-zinc-700">
+                    {g.latestDate ? formatPretty(g.latestDate) : "—"}
+                  </td>
                 </tr>
               );
             })
