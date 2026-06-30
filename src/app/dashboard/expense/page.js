@@ -409,21 +409,21 @@ export default function ExpensePage() {
 
       {/* Add Expense modal */}
       {addExpenseOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-zinc-900/60 p-4 pt-10">
-          <div className="relative w-full max-w-3xl rounded-xl bg-white shadow-xl">
-            <div className="flex items-center justify-between border-b border-zinc-200 px-5 py-3.5">
-              <h2 className="text-sm font-semibold text-zinc-900">New Expense</h2>
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-zinc-900/60 p-4 pt-8">
+          <div className="relative w-full max-w-6xl rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
+              <h2 className="text-base font-semibold text-zinc-900">New Expense</h2>
               <button
                 type="button"
                 onClick={() => setAddExpenseOpen(false)}
-                className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
               >
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
                   <path d="M2 2l12 12M14 2L2 14" strokeLinecap="round"/>
                 </svg>
               </button>
             </div>
-            <div className="p-5">
+            <div className="min-h-[60vh] p-6">
               <ExpenseForm
                 onSubmit={async (payload) => {
                   await createExpense.mutateAsync(payload);
