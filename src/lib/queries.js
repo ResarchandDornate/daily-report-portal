@@ -547,6 +547,36 @@ export function useMarkPaidExpense() {
   });
 }
 
+// HR issues an advance to an employee — creates an approved expense record.
+export function useIssueAdvance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ employee_id, amount, date, note }) =>
+      api.post("/api/expenses/advance-issue", { employee_id, amount, date: date || null, note: note || null })
+        .then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Advance recorded");
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || err.message || "Failed to record advance"),
+  });
+}
+
+// Employee self-records a received advance (creates a pending advance entry for themselves).
+export function useRecordAdvance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ amount, date, note }) =>
+      api.post("/api/expenses/record-advance", { amount, date: date || null, note: note || null })
+        .then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkExpenses });
+      toast.success("Advance recorded");
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || err.message || "Failed to record advance"),
+  });
+}
+
 // Remove one attached bill by its position in the expense's bills list.
 export function useDeleteExpenseBill() {
   const qc = useQueryClient();
