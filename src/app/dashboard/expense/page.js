@@ -382,6 +382,16 @@ export default function ExpensePage() {
     [totalAmount],
   );
 
+  // Total advance and net payable for admin header
+  const totalAdvance = useMemo(() => {
+    const source = !isAdmin
+      ? rawExpenses
+      : viewMode === "mine"
+        ? rawExpenses.filter((e) => me && e.user_id === me.id)
+        : expenses;
+    return source.reduce((sum, e) => sum + (e.advance || 0), 0);
+  }, [rawExpenses, isAdmin, viewMode, me, expenses]);
+
   return (
     <div className="space-y-4">
       <header className="relative overflow-hidden rounded-lg border border-orange-100 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-2.5 shadow-soft">
@@ -397,19 +407,40 @@ export default function ExpensePage() {
                 : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
             </p>
           </div>
-          {/* Total expense — plain inline text, Indian numbering.  The
-              Monthly Summary trigger has moved down into the filter bar so
-              the header stays clean. */}
-          <p className="text-sm font-semibold tabular-nums text-zinc-900">
-            Total Expense = <span className="text-orange-700">{totalAmountText}</span>
-          </p>
+          {/* Header totals — expense, advance, net payable */}
+          <div className="flex items-center gap-4 tabular-nums">
+            <div className="text-right">
+              <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total Expense</div>
+              <div className="text-sm font-bold text-orange-700">
+                ₹{totalAmount.toLocaleString("en-IN")}
+              </div>
+            </div>
+            {isAdmin && viewMode !== "mine" && totalAdvance > 0 && (
+              <>
+                <div className="h-8 w-px bg-orange-200" />
+                <div className="text-right">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total Advance</div>
+                  <div className="text-sm font-bold text-emerald-700">
+                    ₹{totalAdvance.toLocaleString("en-IN")}
+                  </div>
+                </div>
+                <div className="h-8 w-px bg-orange-200" />
+                <div className="text-right">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Net Payable</div>
+                  <div className={`text-sm font-bold ${(totalAmount - totalAdvance) < 0 ? "text-rose-600" : "text-zinc-900"}`}>
+                    {(totalAmount - totalAdvance) < 0 ? "-" : ""}₹{Math.abs(totalAmount - totalAdvance).toLocaleString("en-IN")}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
 
       {/* Add Expense modal */}
       {addExpenseOpen && (
-        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-zinc-900/60 p-4 pt-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-zinc-900/60 p-6">
           <div className="relative w-full max-w-6xl rounded-xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
               <h2 className="text-base font-semibold text-zinc-900">New Expense</h2>
@@ -1670,87 +1701,134 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
               </Table.Row>
             </Table.Head>
             <Table.Body>
-              {group.expenses.map((r) => {
-                const isAdvanceRow = r.amount === 0 && (r.advance || 0) > 0;
-                return (
-                  <Table.Row key={r.id}>
-                    <Table.Td className="whitespace-nowrap">{formatPretty(r.date)}</Table.Td>
-                    <Table.Td>
-                      <span className="capitalize">{r.expense_type}</span>
-                      {r.travel_type && (
-                        <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
-                      )}
-                    </Table.Td>
-                    <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
-                    <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
-                      {r.site_name || "—"}
-                    </Table.Td>
-                    <Table.Td className="text-right tabular-nums font-medium">
-                      {isAdvanceRow ? "—" : `₹${(r.amount || 0).toLocaleString("en-IN")}`}
-                    </Table.Td>
-                    <Table.Td className="text-right tabular-nums text-zinc-700">
-                      {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
-                    </Table.Td>
-                    <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
-                      {isAdvanceRow ? "—" : `₹${Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}`}
-                    </Table.Td>
-                    <Table.Td>
-                      {isAdvanceRow ? <span className="text-zinc-400">—</span> : <StatusPill status={r.status} />}
-                    </Table.Td>
-                    <Table.Td>
-                      {isAdvanceRow ? (
-                        <span className="text-zinc-400">—</span>
-                      ) : (
-                        <BillThumbnail
-                          expense={r}
-                          onOpen={(expense) => setPreview(expense)}
-                        />
-                      )}
-                    </Table.Td>
-                    <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
-                      {r.remarks || "—"}
-                    </Table.Td>
-                    {onDecide && (
-                      <Table.Td className="text-right">
-                        {isAdvanceRow ? (
-                          <span className="text-zinc-400">—</span>
-                        ) : r.status === "pending" ? (
-                          <div className="flex items-center justify-end gap-1">
-                            <button
-                              type="button"
-                              disabled={decidePending}
-                              onClick={() => onDecide(r.id, "rejected")}
-                              className="rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                            >
-                              Reject
-                            </button>
-                            {!hideOnHold && (
-                              <button
-                                type="button"
-                                disabled={decidePending}
-                                onClick={() => onDecide(r.id, "onhold")}
-                                className="rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
-                              >
-                                Hold
-                              </button>
+              {(() => {
+                // Group expenses by date, sorted descending
+                const dateMap = new Map();
+                for (const r of group.expenses) {
+                  if (!dateMap.has(r.date)) dateMap.set(r.date, []);
+                  dateMap.get(r.date).push(r);
+                }
+                const dateGroups = Array.from(dateMap.entries()).sort(([a], [b]) => b.localeCompare(a));
+                const colCount = onDecide ? 11 : 10;
+
+                return dateGroups.flatMap(([date, rows]) => {
+                  const realRows  = rows.filter(r => !(r.amount === 0 && (r.advance || 0) > 0));
+                  const advRows   = rows.filter(r =>  r.amount === 0 && (r.advance || 0) > 0);
+                  const dayTotal  = realRows.reduce((s, r) => s + (r.amount  || 0), 0);
+                  const dayAdv    = rows.reduce((s, r) => s + (r.advance || 0), 0);
+                  const dayNet    = dayTotal - dayAdv;
+                  const pending   = realRows.filter(r => r.status === "pending").length;
+
+                  const pendingExpenses = realRows.filter(r => r.status === "pending");
+
+                  return [
+                    // ── Date group header row — one set of action buttons per day ──
+                    <Table.Row key={`hdr-${date}`} className="bg-orange-50/60 border-t-2 border-orange-100">
+                      <Table.Td colSpan={colCount} className="px-4 py-1.5">
+                        <div className="flex items-center gap-3">
+                          <span className="font-semibold text-[13px] text-zinc-800">
+                            {formatPretty(date)}
+                          </span>
+                          <span className="text-[11px] text-zinc-400">
+                            {realRows.length} expense{realRows.length !== 1 ? "s" : ""}
+                            {advRows.length > 0 && ` · ${advRows.length} advance`}
+                          </span>
+                          <div className="ml-auto flex items-center gap-2.5">
+                            <span className="text-[13px] font-bold tabular-nums text-zinc-900">
+                              ₹{dayTotal.toLocaleString("en-IN")}
+                            </span>
+                            {dayAdv > 0 && (
+                              <span className="text-[11px] tabular-nums text-zinc-500">
+                                adv ₹{dayAdv.toLocaleString("en-IN")}
+                              </span>
                             )}
-                            <button
-                              type="button"
-                              disabled={decidePending}
-                              onClick={() => onDecide(r.id, "approved")}
-                              className="rounded-md bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                            >
-                              Approve
-                            </button>
+                            {dayNet < 0 && (
+                              <span className="text-[11px] tabular-nums font-semibold text-rose-600">
+                                net -₹{Math.abs(dayNet).toLocaleString("en-IN")}
+                              </span>
+                            )}
+                            {onDecide && pendingExpenses.length > 0 && (
+                              <div className="flex items-center gap-1 border-l border-orange-200 pl-2.5">
+                                <button
+                                  type="button"
+                                  disabled={decidePending}
+                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "rejected"))}
+                                  className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                                >
+                                  Reject All
+                                </button>
+                                {!hideOnHold && (
+                                  <button
+                                    type="button"
+                                    disabled={decidePending}
+                                    onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "onhold"))}
+                                    className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                  >
+                                    Hold All
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={decidePending}
+                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "approved"))}
+                                  className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                >
+                                  Approve All
+                                </button>
+                              </div>
+                            )}
                           </div>
-                        ) : (
-                          <span className="text-[11px] text-zinc-400 capitalize">{r.status}</span>
-                        )}
+                        </div>
                       </Table.Td>
-                    )}
-                  </Table.Row>
-                );
-              })}
+                    </Table.Row>,
+                    // ── Individual expense sub-rows (no action buttons) ────
+                    ...rows.map((r) => {
+                      const isAdvanceRow = r.amount === 0 && (r.advance || 0) > 0;
+                      return (
+                        <Table.Row key={r.id} className="bg-white">
+                          <Table.Td className="w-px select-none pl-4 text-[11px] text-zinc-300">└</Table.Td>
+                          <Table.Td>
+                            <span className="capitalize">{r.expense_type}</span>
+                            {r.travel_type && (
+                              <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
+                            )}
+                          </Table.Td>
+                          <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
+                          <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
+                            {r.site_name || "—"}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums font-medium">
+                            {isAdvanceRow ? "—" : `₹${(r.amount || 0).toLocaleString("en-IN")}`}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums text-zinc-700">
+                            {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
+                            {isAdvanceRow ? "—" : `₹${Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}`}
+                          </Table.Td>
+                          <Table.Td>
+                            {isAdvanceRow ? <span className="text-zinc-400">—</span> : <StatusPill status={r.status} />}
+                          </Table.Td>
+                          <Table.Td>
+                            {isAdvanceRow ? (
+                              <span className="text-zinc-400">—</span>
+                            ) : (
+                              <BillThumbnail
+                                expense={r}
+                                onOpen={(expense) => setPreview(expense)}
+                              />
+                            )}
+                          </Table.Td>
+                          <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
+                            {r.remarks || "—"}
+                          </Table.Td>
+                          {onDecide && <Table.Td />}
+                        </Table.Row>
+                      );
+                    }),
+                  ];
+                });
+              })()}
             </Table.Body>
             {(() => {
               const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
