@@ -50,9 +50,28 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+let _refreshPromise = null;
+
+async function _tryRefresh() {
+  const refreshToken = typeof window !== "undefined"
+    ? localStorage.getItem(REFRESH_KEY) : null;
+  if (!refreshToken) return false;
+  try {
+    const res = await axios.post(
+      `${BASE}/api/auth/refresh`,
+      { refresh_token: refreshToken },
+      { headers: { "Content-Type": "application/json" } },
+    );
+    auth.save(res.data);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
     const status = err.response?.status;
     const detail = err.response?.data?.detail;
     if (detail) {
@@ -60,24 +79,37 @@ api.interceptors.response.use(
     }
 
     if (status === 401) {
+      const isLoginEndpoint = (err.config?.url || "").includes("/api/auth/login");
+      const isRefreshEndpoint = (err.config?.url || "").includes("/api/auth/refresh");
+      const alreadyRetried = err.config?._retry;
+
+      if (!isLoginEndpoint && !isRefreshEndpoint && !alreadyRetried) {
+        // Deduplicate concurrent refresh attempts.
+        if (!_refreshPromise) {
+          _refreshPromise = _tryRefresh().finally(() => { _refreshPromise = null; });
+        }
+        const refreshed = await _refreshPromise;
+        if (refreshed) {
+          // Retry the original request with the new token.
+          err.config._retry = true;
+          err.config.headers.Authorization = `Bearer ${auth.getToken()}`;
+          return api(err.config);
+        }
+      }
+
+      // Refresh failed (or this was a login/refresh call) — log out.
       auth.clear();
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("auth:logout"));
       }
-      // Show a toast unless the failing request was a login attempt — the
-      // login mutation has its own toast and we'd otherwise show two at once.
-      const isLoginEndpoint = (err.config?.url || "").includes("/api/auth/login");
       if (!isLoginEndpoint) {
         toast.error("Session expired. Please log in again.");
       }
     } else if (!err.response) {
-      // No HTTP response at all — network down, server unreachable, CORS, etc.
       toast.error("Can't reach the server. Check your connection.");
     } else if (status >= 500) {
       toast.error(`Server error (${status}). Please try again.`);
     }
-    // 4xx errors (other than 401) are surfaced via the mutation's onError so
-    // the user sees the specific field-level message — not a generic toast.
 
     return Promise.reject(err);
   },

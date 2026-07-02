@@ -14,6 +14,8 @@ import {
   useExpenses,
   useMe,
   useUpdateExpense,
+  useIssueAdvance,
+  useRecordAdvance,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -124,6 +126,28 @@ export default function ExpensePage() {
   const addBills = useAddExpenseBills();
   const deleteBill = useDeleteExpenseBill();
   const markPaid = useMarkPaidExpense();
+  const issueAdvance = useIssueAdvance();
+  const recordAdvance = useRecordAdvance();
+  const [addAdvanceOpen, setAddAdvanceOpen] = useState(false);
+  const [empAdvanceOpen, setEmpAdvanceOpen] = useState(false);
+
+  // Employee list for the Add Advance modal — derived from rawExpenses so no extra API call.
+  const employeeList = useMemo(() => {
+    const seen = new Map();
+    for (const e of rawExpenses) {
+      if (!seen.has(e.user_id)) {
+        seen.set(e.user_id, {
+          id: e.user_id,
+          first_name: (e.user_name || "").split(" ")[0] || "",
+          last_name: (e.user_name || "").split(" ").slice(1).join(" ") || "",
+          department_name: e.user_department || "",
+        });
+      }
+    }
+    return Array.from(seen.values()).sort((a, b) =>
+      (a.first_name + a.last_name).localeCompare(b.first_name + b.last_name)
+    );
+  }, [rawExpenses]);
 
   // Two-tier modal state for the admin view: first a list of all expenses
   // for one employee, then a per-expense detail modal opened from that list.
@@ -139,7 +163,10 @@ export default function ExpensePage() {
   const [deptFilter, setDeptFilter] = useState("all");
   // Default to "all months" so the admin sees every employee's complete total
   // on first open.  They can narrow by month using the dropdown.
-  const [monthFilter, setMonthFilter] = useState("all");
+  const [monthFilter, setMonthFilter] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
   // Shivangi opens the page focused on the disbursal queue, so default
   // her status filter to "approved" (her Paid button targets approved
   // rows).  Everyone else starts on "all".
@@ -147,6 +174,14 @@ export default function ExpensePage() {
     if (typeof window === "undefined") return "all";
     return "all";
   });
+  // Employee-view-specific filters (month + status).  Also used when an
+  // admin is viewing their OWN expenses ("mine" mode).
+  const [empMonthFilter, setEmpMonthFilter] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  });
+  const [empStatusFilter, setEmpStatusFilter] = useState("all");
+  const [addExpenseOpen, setAddExpenseOpen] = useState(false);
   // One-shot effect: when `me` first arrives and the caller is the
   // finance approver, switch the filter to "approved".  Keeps the
   // initial render deterministic (SSR-safe) and avoids re-overriding
@@ -241,9 +276,20 @@ export default function ExpensePage() {
   // Admin in "mine" mode narrows to just the admin's own user_id and skips
   // the org-wide filter bar entirely.
   const expenses = useMemo(() => {
-    if (!isAdmin) return rawExpenses;
+    if (!isAdmin) {
+      return rawExpenses.filter((e) => {
+        if (empStatusFilter !== "all" && e.status !== empStatusFilter) return false;
+        if (empMonthFilter !== "all" && (!e.date || !e.date.startsWith(empMonthFilter))) return false;
+        return true;
+      });
+    }
     if (viewMode === "mine") {
-      return rawExpenses.filter((e) => me && e.user_id === me.id);
+      return rawExpenses.filter((e) => {
+        if (!me || e.user_id !== me.id) return false;
+        if (empStatusFilter !== "all" && e.status !== empStatusFilter) return false;
+        if (empMonthFilter !== "all" && (!e.date || !e.date.startsWith(empMonthFilter))) return false;
+        return true;
+      });
     }
     const q = (search || "").trim().toLowerCase();
     return rawExpenses.filter((e) => {
@@ -265,11 +311,43 @@ export default function ExpensePage() {
       }
       return true;
     });
-  }, [rawExpenses, isAdmin, viewMode, me, search, deptFilter, monthFilter, statusFilter, departments]);
+  }, [rawExpenses, isAdmin, viewMode, me, search, deptFilter, monthFilter, statusFilter, departments, empMonthFilter, empStatusFilter]);
 
   // Build a month dropdown from the months that actually have expenses
   // (newest first).  Always includes the CURRENT month even if it has no
   // expenses yet — so the default month filter is selectable.
+  // Month options for the employee / "mine" filter bar — built from the
+  // employee's own expense dates (all months that have at least one expense,
+  // plus the current month so the default is always selectable).
+  const empMonthOptions = useMemo(() => {
+    const seen = new Set();
+    const now = new Date();
+    seen.add(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+    const source = isAdmin
+      ? rawExpenses.filter((e) => me && e.user_id === me.id)
+      : rawExpenses;
+    for (const e of source) {
+      if (e.date && e.date.length >= 7) seen.add(e.date.slice(0, 7));
+    }
+    return Array.from(seen).sort().reverse().map((ym) => {
+      const [y, m] = ym.split("-");
+      const label = new Date(Number(y), Number(m) - 1, 1)
+        .toLocaleString(undefined, { month: "long", year: "numeric" });
+      return { value: ym, label };
+    });
+  }, [rawExpenses, isAdmin, me]);
+
+  // Total expense amount for the employee's selected month (ignores status
+  // filter so the employee always sees their full monthly spend).
+  const empMonthTotal = useMemo(() => {
+    const source = isAdmin
+      ? rawExpenses.filter((e) => me && e.user_id === me.id)
+      : rawExpenses;
+    return source
+      .filter((e) => empMonthFilter === "all" || (e.date && e.date.startsWith(empMonthFilter)))
+      .reduce((s, e) => s + (e.amount || 0), 0);
+  }, [rawExpenses, isAdmin, me, empMonthFilter]);
+
   const monthOptions = useMemo(() => {
     if (!isAdmin) return [];
     const seen = new Set();
@@ -289,14 +367,30 @@ export default function ExpensePage() {
   // Total amount across all currently-visible expenses (admin sees company-
   // wide total; employees see their own grand total).  Formatted in Indian
   // notation — ₹1,23,456 — via toLocaleString('en-IN').
-  const totalAmount = useMemo(
-    () => expenses.reduce((sum, e) => sum + (e.amount || 0), 0),
-    [expenses],
-  );
+  const totalAmount = useMemo(() => {
+    // Header total is always unfiltered — shows grand total for the employee
+    // (or company-wide total for admin) regardless of month/status filters.
+    const source = !isAdmin
+      ? rawExpenses
+      : viewMode === "mine"
+        ? rawExpenses.filter((e) => me && e.user_id === me.id)
+        : expenses; // admin "all" view — filtered total makes sense there
+    return source.reduce((sum, e) => sum + (e.amount || 0), 0);
+  }, [rawExpenses, isAdmin, viewMode, me, expenses]);
   const totalAmountText = useMemo(
     () => `₹${totalAmount.toLocaleString("en-IN")}`,
     [totalAmount],
   );
+
+  // Total advance and net payable for admin header
+  const totalAdvance = useMemo(() => {
+    const source = !isAdmin
+      ? rawExpenses
+      : viewMode === "mine"
+        ? rawExpenses.filter((e) => me && e.user_id === me.id)
+        : expenses;
+    return source.reduce((sum, e) => sum + (e.advance || 0), 0);
+  }, [rawExpenses, isAdmin, viewMode, me, expenses]);
 
   return (
     <div className="space-y-4">
@@ -313,22 +407,74 @@ export default function ExpensePage() {
                 : `Submit an expense — it goes to ${APPROVER_LABEL} for approval.`}
             </p>
           </div>
-          {/* Total expense — plain inline text, Indian numbering.  The
-              Monthly Summary trigger has moved down into the filter bar so
-              the header stays clean. */}
-          <p className="text-sm font-semibold tabular-nums text-zinc-900">
-            Total Expense = <span className="text-orange-700">{totalAmountText}</span>
-          </p>
+          {/* Header totals — expense, advance, net payable */}
+          <div className="flex items-center gap-4 tabular-nums">
+            <div className="text-right">
+              <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total Expense</div>
+              <div className="text-sm font-bold text-orange-700">
+                ₹{totalAmount.toLocaleString("en-IN")}
+              </div>
+            </div>
+            {isAdmin && viewMode !== "mine" && totalAdvance > 0 && (
+              <>
+                <div className="h-8 w-px bg-orange-200" />
+                <div className="text-right">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total Advance</div>
+                  <div className="text-sm font-bold text-emerald-700">
+                    ₹{totalAdvance.toLocaleString("en-IN")}
+                  </div>
+                </div>
+                <div className="h-8 w-px bg-orange-200" />
+                <div className="text-right">
+                  <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Net Payable</div>
+                  <div className={`text-sm font-bold ${(totalAmount - totalAdvance) < 0 ? "text-rose-600" : "text-zinc-900"}`}>
+                    {(totalAmount - totalAdvance) < 0 ? "-" : ""}₹{Math.abs(totalAmount - totalAdvance).toLocaleString("en-IN")}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Submission form is hidden for review-only accounts — Tarini and
-          Shivangi neither file their own expenses through this form.
-          Smita, HR, and every regular employee still see the full form. */}
-      {!isTariniReviewer && !isFinanceApprover && (
-        <ExpenseForm
-          onSubmit={(payload) => createExpense.mutateAsync(payload)}
-          submitting={createExpense.isPending}
+
+      {/* Add Expense modal */}
+      {addExpenseOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-zinc-900/60 p-6">
+          <div className="relative w-full max-w-6xl rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
+              <h2 className="text-base font-semibold text-zinc-900">New Expense</h2>
+              <button
+                type="button"
+                onClick={() => setAddExpenseOpen(false)}
+                className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600"
+              >
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+                  <path d="M2 2l12 12M14 2L2 14" strokeLinecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div className="min-h-[60vh] p-6">
+              <ExpenseForm
+                onSubmit={async (payload) => {
+                  await createExpense.mutateAsync(payload);
+                  setAddExpenseOpen(false);
+                }}
+                submitting={createExpense.isPending}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {empAdvanceOpen && (
+        <EmployeeAdvanceModal
+          onClose={() => setEmpAdvanceOpen(false)}
+          onSave={async ({ amount, date, note }) => {
+            await recordAdvance.mutateAsync({ amount, date, note });
+            setEmpAdvanceOpen(false);
+          }}
+          saving={recordAdvance.isPending}
         />
       )}
 
@@ -492,10 +638,9 @@ export default function ExpensePage() {
             }
           }}
           onOpenEmployee={(group) => {
-            // Rebuild the group from ALL raw (unfiltered) expenses for this
-            // user so the modal always shows the employee's complete history,
-            // regardless of what month filter is active in the admin table.
-            const all = rawExpenses.filter((e) => e.user_id === group.userId);
+            const all = rawExpenses
+              .filter((e) => e.user_id === group.userId)
+              .filter((e) => !monthFilter || monthFilter === "all" || (e.date && e.date.startsWith(monthFilter)));
             setEmpModal({
               ...group,
               expenses: all.slice().sort((a, b) => (a.date < b.date ? 1 : -1)),
@@ -528,6 +673,86 @@ export default function ExpensePage() {
           }}
         />
       ) : (
+        <>
+          {/* Filter bar + action buttons row */}
+          <div className="flex items-center gap-2">
+            {/* Filter bar */}
+            <div className="flex flex-1 items-center gap-2 rounded-lg border border-zinc-200 bg-white px-3 py-2 shadow-sm">
+              <select
+                value={empMonthFilter}
+                onChange={(e) => setEmpMonthFilter(e.target.value)}
+                className="h-7 w-36 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-orange-400 focus:outline-none"
+              >
+                <option value="all">All months</option>
+                {empMonthOptions.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+              <select
+                value={empStatusFilter}
+                onChange={(e) => setEmpStatusFilter(e.target.value)}
+                className="h-7 w-32 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-orange-400 focus:outline-none"
+              >
+                <option value="all">All statuses</option>
+                <option value="pending">Pending</option>
+                <option value="onhold">On Hold</option>
+                <option value="approved">Approved</option>
+                <option value="paid">Paid</option>
+                <option value="rejected">Rejected</option>
+              </select>
+              {(empMonthFilter !== "all" || empStatusFilter !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    setEmpMonthFilter(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+                    setEmpStatusFilter("all");
+                  }}
+                  className="flex h-7 items-center gap-1 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-[11px] text-zinc-500 hover:text-zinc-700 transition-colors"
+                >
+                  <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-2.5 w-2.5">
+                    <path d="M1 1l8 8M9 1L1 9"/>
+                  </svg>
+                  Clear
+                </button>
+              )}
+              <div className="ml-auto flex items-center gap-1.5">
+                <span className="text-[11px] text-zinc-400">
+                  {empMonthFilter === "all" ? "All-time" : (() => {
+                    const [y, m] = empMonthFilter.split("-");
+                    return new Date(Number(y), Number(m) - 1, 1).toLocaleString(undefined, { month: "short", year: "numeric" });
+                  })()}
+                </span>
+                <span className="text-sm font-bold tabular-nums text-orange-700">
+                  ₹{empMonthTotal.toLocaleString("en-IN")}
+                </span>
+              </div>
+            </div>
+            {/* Action buttons — outside the bar, right side */}
+            {!isTariniReviewer && !isFinanceApprover && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setAddExpenseOpen(true)}
+                  className="flex h-9 items-center gap-1.5 rounded-lg border border-orange-300 bg-orange-50 px-3 text-xs font-semibold text-orange-700 hover:bg-orange-100 transition-colors whitespace-nowrap"
+                >
+                  <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3 shrink-0">
+                    <path d="M6 1v10M1 6h10" strokeLinecap="round"/>
+                  </svg>
+                  Add Expense
+                </button>
+                {(!isAdmin || viewMode === "mine") && (
+                  <button
+                    type="button"
+                    onClick={() => setEmpAdvanceOpen(true)}
+                    className="flex h-9 items-center gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50 px-3 text-xs font-medium text-emerald-700 hover:bg-emerald-100 transition-colors whitespace-nowrap"
+                  >
+                    ₹ Advance
+                  </button>
+                )}
+              </>
+            )}
+          </div>
         <ExpenseTable
           rows={expenses}
           isLoading={isLoading}
@@ -547,11 +772,29 @@ export default function ExpensePage() {
             }
           }}
         />
+        </>
       )}
 
       {/* Advances panel — per-employee advance totals derived from expense rows. */}
       {isAdmin && viewMode === "all" && (
-        <AdvancesTable items={advanceSummary} />
+        <AdvancesTable
+          items={advanceSummary}
+          onAddAdvance={() => setAddAdvanceOpen(true)}
+        />
+      )}
+
+      {addAdvanceOpen && (
+        <AddAdvanceModal
+          employees={employeeList}
+          saving={issueAdvance.isPending}
+          onClose={() => setAddAdvanceOpen(false)}
+          onSave={async (data) => {
+            try {
+              await issueAdvance.mutateAsync(data);
+              setAddAdvanceOpen(false);
+            } catch {}
+          }}
+        />
       )}
 
       {/* Admin: per-employee modal listing every expense inline (with
@@ -559,6 +802,7 @@ export default function ExpensePage() {
       {empModal && (
         <EmployeeExpensesModal
           group={empModal}
+          monthFilter={monthFilter}
           onClose={() => setEmpModal(null)}
           onDecide={async (id, decision) => {
             try {
@@ -656,9 +900,6 @@ function ExpenseForm({ onSubmit, submitting }) {
   const [kilometers, setKilometers] = useState("");
   const [ratePerKm, setRatePerKm] = useState("");
   const [amount, setAmount] = useState("");
-  // Advance — money HR already gave the employee before incurring this
-  // expense.  Subtotal owed = amount - advance.  Defaults to 0.
-  const [advance, setAdvance] = useState("");
   const [siteName, setSiteName] = useState("");
   const [remarks, setRemarks] = useState("");
   const [bills, setBills] = useState([]);        // File[]
@@ -762,15 +1003,6 @@ function ExpenseForm({ onSubmit, submitting }) {
       toast.error("Amount must be a non-negative number.");
       return null;
     }
-    const adv = parseInt(advance, 10) || 0;
-    if (adv < 0) {
-      toast.error("Advance must be a non-negative number.");
-      return null;
-    }
-    if (adv > amt) {
-      toast.error("Advance can't be larger than the expense amount.");
-      return null;
-    }
     let finalTravelType = "";
     if (expenseType === "travel") {
       if (!travelType) {
@@ -802,7 +1034,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       expense_type: expenseType,
       travel_type: finalTravelType,
       amount: amt,
-      advance: adv,
+      advance: 0,
       site_name: siteName.trim(),
       remarks: finalRemarks,
       bills,
@@ -813,7 +1045,6 @@ function ExpenseForm({ onSubmit, submitting }) {
   // entries are quick to file).
   function resetEntryForm() {
     setAmount("");
-    setAdvance("");
     setSiteName("");
     setRemarks("");
     setBills([]);
@@ -854,9 +1085,8 @@ function ExpenseForm({ onSubmit, submitting }) {
   return (
     <form
       onSubmit={handleAddToBatch}
-      className="rounded-lg border border-zinc-200 bg-white p-4"
+      className="space-y-4"
     >
-      <h2 className="mb-3 text-sm font-semibold text-zinc-900">New expense</h2>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="Date">
           <input
@@ -955,25 +1185,6 @@ function ExpenseForm({ onSubmit, submitting }) {
             className={inputClass}
             required
           />
-        </Field>
-        <Field label="Advance received (₹, optional)">
-          <input
-            type="number"
-            min={0}
-            value={advance}
-            onChange={(e) => setAdvance(e.target.value)}
-            placeholder="0"
-            className={inputClass}
-          />
-          {amount && advance && parseInt(advance, 10) > 0 && (
-            <p className="mt-1 text-[10px] text-emerald-700">
-              Subtotal owed: ₹
-              {Math.max(
-                0,
-                (parseInt(amount, 10) || 0) - (parseInt(advance, 10) || 0),
-              ).toLocaleString("en-IN")}
-            </p>
-          )}
         </Field>
         <Field label="Site Name (optional)">
           <input
@@ -1197,7 +1408,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
       amount += g.total || 0;
       advance += g.advance || 0;
     }
-    return { amount, advance, subtotal: Math.max(0, amount - advance) };
+    return { amount, advance, subtotal: amount - advance };
   }, [groups]);
   // Month label for the footer.  "All months" when no specific month is
   // selected; otherwise e.g. "June 2026".
@@ -1255,8 +1466,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
               <Table.Td className="tabular-nums text-zinc-700">
                 {g.advance > 0 ? `₹${g.advance.toLocaleString("en-IN")}` : "—"}
               </Table.Td>
-              <Table.Td className="tabular-nums font-semibold text-emerald-700">
-                ₹{Math.max(0, (g.total || 0) - (g.advance || 0)).toLocaleString("en-IN")}
+              <Table.Td className={`tabular-nums font-semibold ${(g.total || 0) - (g.advance || 0) < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                {(() => { const n = (g.total || 0) - (g.advance || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN"); })()}
               </Table.Td>
               <Table.Td>
                 <GroupStatusPill
@@ -1352,8 +1563,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
             <Table.Td className="tabular-nums text-zinc-700">
               {visibleTotals.advance > 0 ? `₹${visibleTotals.advance.toLocaleString("en-IN")}` : "—"}
             </Table.Td>
-            <Table.Td className="tabular-nums text-emerald-700">
-              ₹{visibleTotals.subtotal.toLocaleString("en-IN")}
+            <Table.Td className={`tabular-nums font-semibold ${visibleTotals.subtotal < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+              {(visibleTotals.subtotal < 0 ? "-₹" : "₹") + Math.abs(visibleTotals.subtotal).toLocaleString("en-IN")}
             </Table.Td>
             <Table.Td colSpan={4} />
           </Table.Row>
@@ -1403,7 +1614,7 @@ function StatusMix({ pending, approved, rejected, onHold }) {
   );
 }
 
-function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOnHold }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePending, hideOnHold }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -1443,6 +1654,10 @@ function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOn
               {" "}
               total ₹{(group.total || 0).toLocaleString("en-IN")}
               {group.userDepartment && ` · ${group.userDepartment}`}
+              {monthFilter && monthFilter !== "all" && (() => {
+                const [y, m] = monthFilter.split("-");
+                return ` · ${new Date(Number(y), Number(m) - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" })}`;
+              })()}
             </p>
             {typeBreakdown.length > 0 && (
               <p className="mt-1.5 text-[13px] text-zinc-700">
@@ -1486,83 +1701,139 @@ function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOn
               </Table.Row>
             </Table.Head>
             <Table.Body>
-              {group.expenses.map((r) => (
-                <Table.Row key={r.id}>
-                  <Table.Td className="whitespace-nowrap">{formatPretty(r.date)}</Table.Td>
-                  <Table.Td>
-                    <span className="capitalize">{r.expense_type}</span>
-                    {r.travel_type && (
-                      <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
-                    )}
-                  </Table.Td>
-                  <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
-                  <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
-                    {r.site_name || "—"}
-                  </Table.Td>
-                  <Table.Td className="text-right tabular-nums font-medium">
-                    ₹{(r.amount || 0).toLocaleString("en-IN")}
-                  </Table.Td>
-                  <Table.Td className="text-right tabular-nums text-zinc-700">
-                    {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
-                  </Table.Td>
-                  <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
-                    ₹{Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}
-                  </Table.Td>
-                  <Table.Td>
-                    <StatusPill status={r.status} />
-                  </Table.Td>
-                  <Table.Td>
-                    <BillThumbnail
-                      expense={r}
-                      onOpen={(url, filename) => setPreview({ url, filename })}
-                    />
-                  </Table.Td>
-                  <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
-                    {r.remarks || "—"}
-                  </Table.Td>
-                  {onDecide && (
-                    <Table.Td className="text-right">
-                      {r.status === "pending" ? (
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            disabled={decidePending}
-                            onClick={() => onDecide(r.id, "rejected")}
-                            className="rounded-md border border-rose-300 bg-rose-50 px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
-                          >
-                            Reject
-                          </button>
-                          {!hideOnHold && (
-                            <button
-                              type="button"
-                              disabled={decidePending}
-                              onClick={() => onDecide(r.id, "onhold")}
-                              className="rounded-md border border-sky-300 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
-                            >
-                              Hold
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            disabled={decidePending}
-                            onClick={() => onDecide(r.id, "approved")}
-                            className="rounded-md bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                          >
-                            Approve
-                          </button>
+              {(() => {
+                // Group expenses by date, sorted descending
+                const dateMap = new Map();
+                for (const r of group.expenses) {
+                  if (!dateMap.has(r.date)) dateMap.set(r.date, []);
+                  dateMap.get(r.date).push(r);
+                }
+                const dateGroups = Array.from(dateMap.entries()).sort(([a], [b]) => b.localeCompare(a));
+                const colCount = onDecide ? 11 : 10;
+
+                return dateGroups.flatMap(([date, rows]) => {
+                  const realRows  = rows.filter(r => !(r.amount === 0 && (r.advance || 0) > 0));
+                  const advRows   = rows.filter(r =>  r.amount === 0 && (r.advance || 0) > 0);
+                  const dayTotal  = realRows.reduce((s, r) => s + (r.amount  || 0), 0);
+                  const dayAdv    = rows.reduce((s, r) => s + (r.advance || 0), 0);
+                  const dayNet    = dayTotal - dayAdv;
+                  const pending   = realRows.filter(r => r.status === "pending").length;
+
+                  const pendingExpenses = realRows.filter(r => r.status === "pending");
+
+                  return [
+                    // ── Date group header row — one set of action buttons per day ──
+                    <Table.Row key={`hdr-${date}`} className="bg-orange-50/60 border-t-2 border-orange-100">
+                      <Table.Td colSpan={colCount} className="px-4 py-1.5">
+                        <div className="flex items-center gap-3">
+                          <span className="font-semibold text-[13px] text-zinc-800">
+                            {formatPretty(date)}
+                          </span>
+                          <span className="text-[11px] text-zinc-400">
+                            {realRows.length} expense{realRows.length !== 1 ? "s" : ""}
+                            {advRows.length > 0 && ` · ${advRows.length} advance`}
+                          </span>
+                          <div className="ml-auto flex items-center gap-2.5">
+                            <span className="text-[13px] font-bold tabular-nums text-zinc-900">
+                              ₹{dayTotal.toLocaleString("en-IN")}
+                            </span>
+                            {dayAdv > 0 && (
+                              <span className="text-[11px] tabular-nums text-zinc-500">
+                                adv ₹{dayAdv.toLocaleString("en-IN")}
+                              </span>
+                            )}
+                            {dayNet < 0 && (
+                              <span className="text-[11px] tabular-nums font-semibold text-rose-600">
+                                net -₹{Math.abs(dayNet).toLocaleString("en-IN")}
+                              </span>
+                            )}
+                            {onDecide && pendingExpenses.length > 0 && (
+                              <div className="flex items-center gap-1 border-l border-orange-200 pl-2.5">
+                                <button
+                                  type="button"
+                                  disabled={decidePending}
+                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "rejected"))}
+                                  className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                                >
+                                  Reject All
+                                </button>
+                                {!hideOnHold && (
+                                  <button
+                                    type="button"
+                                    disabled={decidePending}
+                                    onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "onhold"))}
+                                    className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                  >
+                                    Hold All
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={decidePending}
+                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "approved"))}
+                                  className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                >
+                                  Approve All
+                                </button>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      ) : (
-                        <span className="text-[11px] text-zinc-400 capitalize">{r.status}</span>
-                      )}
-                    </Table.Td>
-                  )}
-                </Table.Row>
-              ))}
+                      </Table.Td>
+                    </Table.Row>,
+                    // ── Individual expense sub-rows (no action buttons) ────
+                    ...rows.map((r) => {
+                      const isAdvanceRow = r.amount === 0 && (r.advance || 0) > 0;
+                      return (
+                        <Table.Row key={r.id} className="bg-white">
+                          <Table.Td className="w-px select-none pl-4 text-[11px] text-zinc-300">└</Table.Td>
+                          <Table.Td>
+                            <span className="capitalize">{r.expense_type}</span>
+                            {r.travel_type && (
+                              <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
+                            )}
+                          </Table.Td>
+                          <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
+                          <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
+                            {r.site_name || "—"}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums font-medium">
+                            {isAdvanceRow ? "—" : `₹${(r.amount || 0).toLocaleString("en-IN")}`}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums text-zinc-700">
+                            {r.advance ? `₹${(r.advance || 0).toLocaleString("en-IN")}` : "—"}
+                          </Table.Td>
+                          <Table.Td className="text-right tabular-nums font-semibold text-emerald-700">
+                            {isAdvanceRow ? "—" : `₹${Math.max(0, (r.amount || 0) - (r.advance || 0)).toLocaleString("en-IN")}`}
+                          </Table.Td>
+                          <Table.Td>
+                            {isAdvanceRow ? <span className="text-zinc-400">—</span> : <StatusPill status={r.status} />}
+                          </Table.Td>
+                          <Table.Td>
+                            {isAdvanceRow ? (
+                              <span className="text-zinc-400">—</span>
+                            ) : (
+                              <BillThumbnail
+                                expense={r}
+                                onOpen={(expense) => setPreview(expense)}
+                              />
+                            )}
+                          </Table.Td>
+                          <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
+                            {r.remarks || "—"}
+                          </Table.Td>
+                          {onDecide && <Table.Td />}
+                        </Table.Row>
+                      );
+                    }),
+                  ];
+                });
+              })()}
             </Table.Body>
             {(() => {
               const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
               const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
-              const totalNet = Math.max(0, totalAmt - totalAdv);
+              const totalNet = totalAmt - totalAdv;
               return (
                 <Table.Foot>
                   <Table.Row className="font-semibold">
@@ -1575,8 +1846,8 @@ function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOn
                     <Table.Td className="text-right tabular-nums text-zinc-900">
                       ₹{totalAdv.toLocaleString("en-IN")}
                     </Table.Td>
-                    <Table.Td className="text-right tabular-nums text-emerald-700">
-                      ₹{totalNet.toLocaleString("en-IN")}
+                    <Table.Td className={`text-right tabular-nums ${totalNet < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                      {(totalNet < 0 ? "-₹" : "₹") + Math.abs(totalNet).toLocaleString("en-IN")}
                     </Table.Td>
                     <Table.Td colSpan={onDecide ? 4 : 3} />
                   </Table.Row>
@@ -1588,8 +1859,7 @@ function EmployeeExpensesModal({ group, onClose, onDecide, decidePending, hideOn
       </div>
       {preview && (
         <BillPreviewOverlay
-          url={preview.url}
-          filename={preview.filename}
+          expense={preview}
           onClose={() => setPreview(null)}
         />
       )}
@@ -1648,7 +1918,7 @@ function BillThumbnail({ expense, onOpen }) {
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        if (url) onOpen(url, firstName);
+        if (url) onOpen(expense);
       }}
       disabled={!url}
       title={`${billCount} bill${billCount === 1 ? "" : "s"} — click to view`}
@@ -1783,6 +2053,7 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
           name: e.user_name || "—",
           department: e.user_department || "",
           total: 0,
+          advance: 0,
           pending: 0,
           approved: 0,
           rejected: 0,
@@ -1792,6 +2063,7 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
       }
       const g = byUser.get(e.user_id);
       g.total += (e.amount || 0);
+      g.advance += (e.advance || 0);
       if (e.status === "pending")  g.pending  += 1;
       if (e.status === "approved") g.approved += 1;
       if (e.status === "rejected") g.rejected += 1;
@@ -1806,13 +2078,12 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
   const totals = useMemo(() => {
     let amount = 0, advance = 0, subtotal = 0;
     for (const g of groups) {
-      const a = parseInt(advances[g.userId], 10) || 0;
       amount   += g.total;
-      advance  += a;
-      subtotal += (g.total - a);
+      advance  += g.advance;
+      subtotal += Math.max(0, g.total - g.advance);
     }
     return { amount, advance, subtotal };
-  }, [groups, advances]);
+  }, [groups]);
 
   const monthLabel = new Date(year, month - 1, 1).toLocaleString(undefined, {
     month: "long", year: "numeric",
@@ -1925,15 +2196,13 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                   <th className="px-3 py-2 text-right">Total Amount</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2 text-right">Advance</th>
-                  <th className="px-3 py-2 text-right">Subtotal</th>
-                  <th className="px-3 py-2">Remarks (visible to employee)</th>
+                  <th className="px-3 py-2 text-right">Net Payable</th>
                   <th className="px-3 py-2">Submit Date</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {groups.map((g) => {
-                  const adv = parseInt(advances[g.userId], 10) || 0;
-                  const subtotal = g.total - adv;
+                  const subtotal = Math.max(0, g.total - g.advance);
                   return (
                     <tr key={g.userId}>
                       <td className="px-3 py-2">
@@ -1953,34 +2222,11 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                           onHold={g.onhold}
                         />
                       </td>
-                      <td className="px-3 py-2">
-                        <input
-                          type="number"
-                          min={0}
-                          value={advances[g.userId] ?? ""}
-                          onChange={(e) => setAdvances((prev) => ({
-                            ...prev,
-                            [g.userId]: e.target.value,
-                          }))}
-                          placeholder="0"
-                          className="w-24 rounded-md border border-zinc-300 bg-white px-2 py-1 text-right text-xs tabular-nums"
-                        />
+                      <td className="px-3 py-2 text-right tabular-nums text-zinc-700">
+                        {g.advance > 0 ? `₹${g.advance.toLocaleString("en-IN")}` : "—"}
                       </td>
                       <td className="px-3 py-2 text-right tabular-nums font-semibold text-emerald-700">
                         ₹{subtotal.toLocaleString("en-IN")}
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <textarea
-                          value={notes[g.userId]?.remark ?? ""}
-                          onChange={(e) => saveNote(g.userId, { remark: e.target.value })}
-                          rows={2}
-                          placeholder={
-                            g.onhold > 0
-                              ? "Why is this on hold?  (visible to employee)"
-                              : "Optional remark"
-                          }
-                          className="w-full min-w-[200px] rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
-                        />
                       </td>
                       <td className="px-3 py-2 whitespace-nowrap text-zinc-700">
                         {g.latestSubmit
@@ -1997,12 +2243,11 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
                   </td>
                   <td className="px-3 py-2" />
                   <td className="px-3 py-2 text-right tabular-nums text-zinc-900">
-                    ₹{totals.advance.toLocaleString("en-IN")}
+                    {totals.advance > 0 ? `₹${totals.advance.toLocaleString("en-IN")}` : "—"}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-emerald-700">
                     ₹{totals.subtotal.toLocaleString("en-IN")}
                   </td>
-                  <td className="px-3 py-2" />
                   <td className="px-3 py-2" />
                 </tr>
               </tbody>
@@ -2014,28 +2259,106 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
   );
 }
 
-function BillPreviewOverlay({ url, filename, onClose }) {
-  const isPdf = /\.pdf$/i.test(filename || "");
+function BillPreviewOverlay({ expense, onClose }) {
+  const bills = expense?.bills || [];
+  const billCount = bills.length;
+  const [index, setIndex] = useState(0);
+  const [urls, setUrls] = useState({});
+
+  useEffect(() => {
+    if (!billCount) return;
+    const created = [];
+    let cancelled = false;
+    (async () => {
+      const { api } = await import("@/lib/api");
+      for (let i = 0; i < billCount; i++) {
+        try {
+          const resp = await api.get(`/api/expenses/${expense.id}/bill/${i}`, { responseType: "blob" });
+          if (cancelled) return;
+          const u = URL.createObjectURL(resp.data);
+          created.push(u);
+          setUrls((prev) => ({ ...prev, [i]: u }));
+        } catch {
+          if (!cancelled) setUrls((prev) => ({ ...prev, [i]: null }));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      created.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [expense?.id, billCount]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") setIndex((i) => Math.min(i + 1, billCount - 1));
+      if (e.key === "ArrowLeft"  || e.key === "ArrowUp")   setIndex((i) => Math.max(i - 1, 0));
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [billCount, onClose]);
+
+  const currentFilename = bills[index]?.filename || "";
+  const isPdf = /\.pdf$/i.test(currentFilename);
+  const currentUrl = urls[index];
+
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/70 p-4"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/80 p-4"
       onClick={onClose}
     >
       <div
-        className="relative max-h-[90vh] max-w-5xl overflow-hidden rounded-lg bg-white"
+        className="relative flex flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          className="absolute right-2 top-2 z-10 rounded-md bg-zinc-900/60 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-900/80"
-        >
-          Close
-        </button>
-        {isPdf ? (
-          <iframe src={url} className="h-[80vh] w-[80vw]" title="Bill" />
-        ) : (
-          <img src={url} alt={filename || "Bill"} className="max-h-[85vh] max-w-[90vw] object-contain" />
+        {/* Counter + close */}
+        <div className="flex w-full items-center justify-between px-1">
+          <span className="text-xs font-medium text-white/80">
+            {billCount > 1 ? `${index + 1} / ${billCount}` : "1 bill"}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md bg-zinc-900/60 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-900/80"
+          >
+            Close
+          </button>
+        </div>
+
+        {/* Image / PDF */}
+        <div className="relative max-h-[80vh] max-w-[90vw] overflow-hidden rounded-lg bg-white">
+          {currentUrl === undefined ? (
+            <div className="flex h-48 w-64 items-center justify-center text-zinc-400 text-sm">Loading…</div>
+          ) : currentUrl === null ? (
+            <div className="flex h-48 w-64 items-center justify-center text-zinc-400 text-sm">Failed to load</div>
+          ) : isPdf ? (
+            <iframe src={currentUrl} className="h-[75vh] w-[80vw]" title="Bill" />
+          ) : (
+            <img src={currentUrl} alt={currentFilename || "Bill"} className="max-h-[80vh] max-w-[90vw] object-contain" />
+          )}
+        </div>
+
+        {/* Prev / Next */}
+        {billCount > 1 && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIndex((i) => Math.max(i - 1, 0))}
+              disabled={index === 0}
+              className="rounded-full bg-white/20 px-4 py-1.5 text-sm font-medium text-white hover:bg-white/30 disabled:opacity-30"
+            >
+              ← Prev
+            </button>
+            <button
+              type="button"
+              onClick={() => setIndex((i) => Math.min(i + 1, billCount - 1))}
+              disabled={index === billCount - 1}
+              className="rounded-full bg-white/20 px-4 py-1.5 text-sm font-medium text-white hover:bg-white/30 disabled:opacity-30"
+            >
+              Next →
+            </button>
+          </div>
         )}
       </div>
     </div>
@@ -2544,7 +2867,172 @@ function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill }) {
 // Per-employee advance summary — derived from expense rows (not MonthlyExpenseNote).
 // Shows every employee who has a non-zero advance on at least one expense, with
 // a breakdown of how much is pending vs approved.
-function AdvancesTable({ items }) {
+function EmployeeAdvanceModal({ onClose, onSave, saving }) {
+  const [amount, setAmount] = useState("");
+  const [date, setDate]     = useState(todayISO());
+  const [note, setNote]     = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!amount || Number(amount) <= 0) return;
+    onSave({ amount: Number(amount), date, note });
+  }
+
+  const inputCls = "w-full rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
+          <h2 className="text-sm font-semibold text-zinc-900">Record Advance Received</h2>
+          <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 text-lg leading-none">×</button>
+        </div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-5">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Date received</label>
+              <input
+                type="date"
+                value={date}
+                max={todayISO()}
+                onChange={(e) => setDate(e.target.value || todayISO())}
+                className={inputCls}
+                required
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Amount (₹)</label>
+              <input
+                type="number"
+                min={1}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0"
+                className={inputCls}
+                required
+                autoFocus
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Remark (optional)</label>
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. advance for site visit"
+              className={inputCls}
+              maxLength={200}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose}
+              className="rounded-md border border-zinc-200 px-4 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving}
+              className="rounded-md bg-emerald-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
+              {saving ? "Saving…" : "Record"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AddAdvanceModal({ employees, onClose, onSave, saving }) {
+  const [employeeId, setEmployeeId] = useState("");
+  const [amount, setAmount]         = useState("");
+  const [date, setDate]             = useState(todayISO());
+  const [note, setNote]             = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (!employeeId || !amount || Number(amount) <= 0) return;
+    onSave({ employee_id: Number(employeeId), amount: Number(amount), date, note });
+  }
+
+  const inputCls = "w-full rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-zinc-100 px-5 py-3">
+          <h2 className="text-sm font-semibold text-zinc-900">Issue Advance</h2>
+          <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 text-lg leading-none">×</button>
+        </div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-5">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Employee</label>
+            <select
+              value={employeeId}
+              onChange={(e) => setEmployeeId(e.target.value)}
+              className={inputCls}
+              required
+            >
+              <option value="">Select employee…</option>
+              {(employees || []).map((emp) => (
+                <option key={emp.id} value={emp.id}>
+                  {emp.first_name} {emp.last_name}
+                  {emp.department_name ? ` · ${emp.department_name}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Date</label>
+              <input
+                type="date"
+                value={date}
+                max={todayISO()}
+                onChange={(e) => setDate(e.target.value || todayISO())}
+                className={inputCls}
+                required
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Amount (₹)</label>
+              <input
+                type="number"
+                min={1}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0"
+                className={inputCls}
+                required
+              />
+            </div>
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Note (optional)</label>
+            <input
+              type="text"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. advance for site visit"
+              className={inputCls}
+              maxLength={200}
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose}
+              className="rounded-md border border-zinc-200 px-4 py-1.5 text-xs font-medium text-zinc-600 hover:bg-zinc-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving || !employeeId || !amount}
+              className="rounded-md bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+              {saving ? "Saving…" : "Issue Advance"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AdvancesTable({ items, onAddAdvance }) {
   const totalAdvance = (items || []).reduce((s, g) => s + (g.totalAdvance || 0), 0);
   return (
     <div className="rounded-lg border border-zinc-200 bg-white">
@@ -2555,11 +3043,22 @@ function AdvancesTable({ items }) {
             Per-employee advance totals from all expense records.
           </p>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-wider text-zinc-500">Total advance</p>
-          <p className="text-sm font-semibold text-zinc-900 tabular-nums">
-            ₹{totalAdvance.toLocaleString("en-IN")}
-          </p>
+        <div className="flex items-center gap-3">
+          {onAddAdvance && (
+            <button
+              type="button"
+              onClick={onAddAdvance}
+              className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+            >
+              + Add Advance
+            </button>
+          )}
+          <div className="text-right">
+            <p className="text-[10px] uppercase tracking-wider text-zinc-500">Total advance</p>
+            <p className="text-sm font-semibold text-zinc-900 tabular-nums">
+              ₹{totalAdvance.toLocaleString("en-IN")}
+            </p>
+          </div>
         </div>
       </div>
       <table className="min-w-full divide-y divide-zinc-100 text-xs">
@@ -2569,20 +3068,19 @@ function AdvancesTable({ items }) {
             <th className="px-4 py-2 text-right">Total Expense</th>
             <th className="px-4 py-2 text-right">Total Advance</th>
             <th className="px-4 py-2 text-right">Net Payable</th>
-            <th className="px-4 py-2">Status</th>
             <th className="px-4 py-2">Latest Expense</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-zinc-100">
           {(items || []).length === 0 ? (
             <tr>
-              <td colSpan={6} className="px-4 py-6 text-center text-zinc-500">
+              <td colSpan={5} className="px-4 py-6 text-center text-zinc-500">
                 No advances recorded on any expense yet.
               </td>
             </tr>
           ) : (
             items.map((g) => {
-              const net = Math.max(0, g.totalAmount - g.totalAdvance);
+              const net = g.totalAmount - g.totalAdvance;
               return (
                 <tr key={g.userId} className="hover:bg-zinc-50/60">
                   <td className="px-4 py-2">
@@ -2599,22 +3097,8 @@ function AdvancesTable({ items }) {
                   <td className="px-4 py-2 text-right tabular-nums font-semibold text-zinc-900">
                     ₹{g.totalAdvance.toLocaleString("en-IN")}
                   </td>
-                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-emerald-700">
-                    ₹{net.toLocaleString("en-IN")}
-                  </td>
-                  <td className="px-4 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {g.pendingAdv > 0 && (
-                        <span className="inline-flex items-center rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-amber-200 text-amber-800">
-                          Pending ₹{g.pendingAdv.toLocaleString("en-IN")}
-                        </span>
-                      )}
-                      {g.approvedAdv > 0 && (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-emerald-200 text-emerald-700">
-                          Approved ₹{g.approvedAdv.toLocaleString("en-IN")}
-                        </span>
-                      )}
-                    </div>
+                  <td className={`px-4 py-2 text-right tabular-nums font-semibold ${net < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                    {(net < 0 ? "-₹" : "₹") + Math.abs(net).toLocaleString("en-IN")}
                   </td>
                   <td className="px-4 py-2 text-zinc-700">
                     {g.latestDate ? formatPretty(g.latestDate) : "—"}
@@ -2699,7 +3183,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
               <Table.Td>
                 <BillThumbnail
                   expense={r}
-                  onOpen={(url, filename) => setPreview({ url, filename })}
+                  onOpen={(expense) => setPreview(expense)}
                 />
               </Table.Td>
               <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
@@ -2751,8 +3235,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
     </Table>
     {preview && (
       <BillPreviewOverlay
-        url={preview.url}
-        filename={preview.filename}
+        expense={preview}
         onClose={() => setPreview(null)}
       />
     )}
