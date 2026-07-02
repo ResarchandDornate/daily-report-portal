@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { formatPretty, todayISO } from "@/lib/data";
 import {
@@ -392,6 +393,27 @@ export default function ExpensePage() {
     return source.reduce((sum, e) => sum + (e.advance || 0), 0);
   }, [rawExpenses, isAdmin, viewMode, me, expenses]);
 
+  function downloadMonthlyExcel() {
+    const header = ["Date", "Expense Type", "Travel Type", "Mode", "Site Name", "Amount (₹)", "Advance (₹)", "Net (₹)", "Remarks"];
+    const dataRows = expenses.map((e) => {
+      const expLabel = EXPENSE_TYPES.find((t) => t.value === e.expense_type)?.label || e.expense_type || "";
+      const allTravel = [...TRAVEL_TYPES.filter((t) => t.value !== "other"), ...TRAVEL_SUBTYPES];
+      const travelLabel = allTravel.find((t) => t.value === e.travel_type)?.label || e.travel_type || "";
+      const modeLabel = MODES.find((m) => m.value === e.mode)?.label || e.mode || "";
+      const amt = e.amount || 0;
+      const adv = e.advance || 0;
+      return [e.date || "", expLabel, travelLabel, modeLabel, e.site_name || "", amt, adv, amt - adv, e.remarks || ""];
+    });
+    const totalAmt = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const totalAdv = expenses.reduce((s, e) => s + (e.advance || 0), 0);
+    dataRows.push(["TOTAL", "", "", "", "", totalAmt, totalAdv, totalAmt - totalAdv, ""]);
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+    ws["!cols"] = [12, 16, 14, 14, 20, 12, 12, 12, 30].map((w) => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Expense Summary");
+    XLSX.writeFile(wb, `expense-summary-${empMonthFilter}.xlsx`);
+  }
+
   return (
     <div className="space-y-4">
       <header className="relative overflow-hidden rounded-lg border border-orange-100 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-2.5 shadow-soft">
@@ -751,6 +773,19 @@ export default function ExpensePage() {
                   </button>
                 )}
               </>
+            )}
+            {empMonthFilter !== "all" && expenses.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadMonthlyExcel}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 transition-colors whitespace-nowrap"
+                title="Download monthly expense summary as Excel"
+              >
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3 w-3 shrink-0">
+                  <path d="M6 1v7M3 6l3 3 3-3M1 10h10" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Excel
+              </button>
             )}
           </div>
         <ExpenseTable
