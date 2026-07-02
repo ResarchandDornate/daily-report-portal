@@ -13,8 +13,12 @@ import {
 export default function SalesUploadsPage() {
   const { data: me } = useMe();
   const isHR = me?.role === "hr";
+  const isTarini = (() => {
+    const local = (me?.email || "").toLowerCase().split("@")[0];
+    return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
+  })();
   const canUpload =
-    isHR || ["insideSales", "salesService"].includes(me?.department?.slug);
+    !isTarini && (isHR || ["insideSales", "salesService"].includes(me?.department?.slug));
 
   const { data: uploads = [], isLoading } = useSalesUploads();
   const upload = useUploadSalesSheet();
@@ -68,6 +72,39 @@ export default function SalesUploadsPage() {
       ),
     [uploads],
   );
+
+  const [monthFilter, setMonthFilter] = useState("all");
+  const [empFilter, setEmpFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  const monthOptions = useMemo(() => {
+    const seen = new Set();
+    for (const u of sorted) {
+      if (u.period_start?.length >= 7) seen.add(u.period_start.slice(0, 7));
+    }
+    return Array.from(seen).sort().reverse().map((ym) => {
+      const [y, m] = ym.split("-");
+      return {
+        value: ym,
+        label: new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" }),
+      };
+    });
+  }, [sorted]);
+
+  const empOptions = useMemo(() => {
+    const seen = new Set();
+    for (const u of sorted) { if (u.user_name) seen.add(u.user_name); }
+    return Array.from(seen).sort();
+  }, [sorted]);
+
+  const filtered = useMemo(() => {
+    return sorted.filter((u) => {
+      if (monthFilter !== "all" && (u.period_start || "").slice(0, 7) !== monthFilter) return false;
+      if (empFilter !== "all" && u.user_name !== empFilter) return false;
+      if (typeFilter !== "all" && u.period_type !== typeFilter) return false;
+      return true;
+    });
+  }, [sorted, monthFilter, empFilter, typeFilter]);
 
   if (!me) return null;
 
@@ -175,22 +212,70 @@ export default function SalesUploadsPage() {
       )}
 
       <div className="rounded-lg border border-zinc-200 bg-white">
-        <div className="border-b border-zinc-100 px-4 py-2.5">
+        <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-4 py-2.5">
           <h2 className="text-sm font-semibold text-zinc-900">
-            {isHR ? "All uploads" : "My uploads"}{" "}
-            <span className="text-[11px] font-normal text-zinc-500">({sorted.length})</span>
+            {isHR || isTarini ? "All uploads" : "My uploads"}{" "}
+            <span className="text-[11px] font-normal text-zinc-500">({filtered.length}{filtered.length !== sorted.length ? ` of ${sorted.length}` : ""})</span>
           </h2>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* Month filter */}
+            <select
+              value={monthFilter}
+              onChange={(e) => setMonthFilter(e.target.value)}
+              className="h-7 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-sky-400 focus:outline-none"
+            >
+              <option value="all">All months</option>
+              {monthOptions.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            {/* Period type filter */}
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+              className="h-7 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-sky-400 focus:outline-none"
+            >
+              <option value="all">All types</option>
+              <option value="weekly">Weekly</option>
+              <option value="monthly">Monthly</option>
+              <option value="adhoc">Ad-hoc</option>
+            </select>
+            {/* Employee filter — HR and Tarini see all uploads */}
+            {(isHR || isTarini) && empOptions.length > 1 && (
+              <select
+                value={empFilter}
+                onChange={(e) => setEmpFilter(e.target.value)}
+                className="h-7 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-xs text-zinc-800 focus:border-sky-400 focus:outline-none"
+              >
+                <option value="all">All employees</option>
+                {empOptions.map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            )}
+            {/* Clear button — shown only when any filter is active */}
+            {(monthFilter !== "all" || typeFilter !== "all" || empFilter !== "all") && (
+              <button
+                type="button"
+                onClick={() => { setMonthFilter("all"); setTypeFilter("all"); setEmpFilter("all"); }}
+                className="flex h-7 items-center gap-1 rounded-md border border-zinc-300 bg-zinc-50 px-2 text-[11px] text-zinc-500 hover:text-zinc-700"
+              >
+                <svg viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-2.5 w-2.5"><path d="M1 1l8 8M9 1L1 9"/></svg>
+                Clear
+              </button>
+            )}
+          </div>
         </div>
         <div className="divide-y divide-zinc-100">
           {isLoading && (
             <p className="px-4 py-6 text-center text-xs text-zinc-500">Loading…</p>
           )}
-          {!isLoading && sorted.length === 0 && (
+          {!isLoading && filtered.length === 0 && (
             <p className="px-4 py-10 text-center text-xs text-zinc-500">
-              No uploads yet. Drop in this week&rsquo;s calling sheet above.
+              {sorted.length === 0 ? "No uploads yet. Drop in this week’s calling sheet above." : "No uploads match the selected filters."}
             </p>
           )}
-          {sorted.map((u) => {
+          {filtered.map((u) => {
             const summary = u.parsed_summary || {};
             const headers = Array.isArray(summary.headers) ? summary.headers : [];
             const preview = Array.isArray(summary.preview_rows) ? summary.preview_rows : [];
