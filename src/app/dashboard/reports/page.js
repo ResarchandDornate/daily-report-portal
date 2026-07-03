@@ -888,9 +888,20 @@ function ReportDetailModal({ report, employee, onClose }) {
           </button>
         </div>
 
-        {/* Body — summary text, label + value per line, no cards */}
+        {/* Body — summary text, label + value per line.  Leave rows
+            collapse to a single red "Absent" pill so HR doesn't see the
+            same "On Leave" repeated in every field. */}
         <div className="flex-1 overflow-auto bg-white px-5 py-4">
-          {fields.length === 0 ? (
+          {report.data?.__leave__ === "1" ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-sm font-semibold text-rose-700 ring-1 ring-rose-200">
+                Absent
+              </span>
+              <span className="text-[11px] text-zinc-500">
+                Leave recorded for this day — no work fields filled.
+              </span>
+            </div>
+          ) : fields.length === 0 ? (
             <p className="text-xs text-zinc-500">No report fields defined for this department.</p>
           ) : (
             <p className="text-[13px] leading-7 text-zinc-800">
