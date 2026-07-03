@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { formatPretty, fullName, getWeekRange, todayISO } from "@/lib/data";
+import { formatPretty, fullName, todayISO } from "@/lib/data";
 import {
   useDeleteDepartment,
   useDepartments,
@@ -48,11 +48,8 @@ export default function DepartmentPage() {
   const isSingleDay = rangeStart === rangeEnd;
   const isTodayOnly = isSingleDay && rangeStart === today;
 
-  // The "This Week" badge always tracks the current calendar week — it is
-  // independent of the range filter so HR can still spot this week's gaps
-  // even while scoping the rest of the table to a past window.
-  const week = useMemo(() => getWeekRange(), []);
-  const weekTotal = 5; // full Mon-Fri week — numerator is "day index reached"
+  // "This Week" column was replaced by the range-scoped counters; the
+  // weekly badge helpers are no longer needed on this page.
 
   // Sales-only extra column.  Look up the report field whose label is the
   // "meetings" counter so we can sum it per employee.
@@ -83,26 +80,11 @@ export default function DepartmentPage() {
     return total;
   }
 
-  // Two windows in the current calendar month:
-  //   monthRange  → 1st of month → today  (used for "elapsed", missing count)
-  //   monthFull   → 1st of month → last day of month  (used as the numerator)
-  // Mon-Fri only; Sat/Sun excluded everywhere.
-  const monthRange = useMemo(() => {
-    const t = new Date();
-    const start = new Date(t.getFullYear(), t.getMonth(), 1);
-    const fmt = (d) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    return { start: fmt(start), end: fmt(t) };
-  }, []);
-  const monthFull = useMemo(() => {
-    const t = new Date();
-    const start = new Date(t.getFullYear(), t.getMonth(), 1);
-    const end = new Date(t.getFullYear(), t.getMonth() + 1, 0); // last day
-    const fmt = (d) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    return { start: fmt(start), end: fmt(end) };
-  }, []);
+  // Working-day counters are now scoped to the SELECTED range instead of
+  // the current calendar month.  "Elapsed" is capped at today so a range
+  // that spills into the future doesn't inflate the missing count.
   function countWeekdays(startISO, endISO) {
+    if (!startISO || !endISO || startISO > endISO) return 0;
     let count = 0;
     const d = new Date(startISO + "T00:00:00");
     const end = new Date(endISO + "T00:00:00");
@@ -113,15 +95,19 @@ export default function DepartmentPage() {
     }
     return count;
   }
-  // Total Mon-Fri across the whole current month — shown as numerator.
-  const monthWorkdays = useMemo(
-    () => countWeekdays(monthFull.start, monthFull.end),
-    [monthFull],
+  // Full Mon-Fri count across the selected range (e.g. 22 for June 2026).
+  const rangeWorkdays = useMemo(
+    () => countWeekdays(rangeStart, rangeEnd),
+    [rangeStart, rangeEnd],
   );
-  // Mon-Fri elapsed so far (start of month → today) — used to compute missing.
-  const elapsedWorkdays = useMemo(
-    () => countWeekdays(monthRange.start, monthRange.end),
-    [monthRange],
+  // "Elapsed" portion of the range — start → min(rangeEnd, today).  For a
+  // range fully in the past this equals rangeWorkdays; for a range that
+  // extends into the future it's capped at today so "missing" doesn't
+  // penalise days that haven't happened yet.
+  const elapsedEnd = rangeEnd < today ? rangeEnd : today;
+  const rangeWorkdaysElapsed = useMemo(
+    () => (elapsedEnd < rangeStart ? 0 : countWeekdays(rangeStart, elapsedEnd)),
+    [rangeStart, elapsedEnd],
   );
 
   const rows = useMemo(() => {
@@ -135,23 +121,15 @@ export default function DepartmentPage() {
         const submittedToday = empReports.some(
           (r) => r.date >= rangeStart && r.date <= rangeEnd,
         );
-        // Use "latest workday index in the selected week" as the numerator.
-        // The window slides with `selectedDate`, so picking a date in a past
-        // week shows that week's full attendance.
-        let maxDow = 0;
-        for (const r of empReports) {
-          if (r.date < week.start || r.date > week.end) continue;
-          const dow = new Date(r.date + "T00:00:00").getDay();
-          if (dow === 0 || dow === 6) continue;
-          if (dow > maxDow) maxDow = dow; // Mon=1 ... Fri=5
-        }
-        const weekCount = Math.min(maxDow, weekTotal);
-        // Working-days/missing for the current calendar month.
-        // Missing is "elapsed Mon-Fri so far − reports submitted in month".
-        const monthSubmitted = empReports.filter(
-          (r) => r.date >= monthRange.start && r.date <= monthRange.end,
+        // Working-days / missing counters scoped to the SELECTED range.
+        // Missing = elapsed workdays inside the range that the employee
+        // didn't file for (weekend rows don't count either way — reports
+        // filed on Sat/Sun are still counted as "filed", but the
+        // denominator only tracks Mon-Fri).
+        const rangeSubmitted = empReports.filter(
+          (r) => r.date >= rangeStart && r.date <= rangeEnd,
         ).length;
-        const monthMissing = Math.max(0, elapsedWorkdays - monthSubmitted);
+        const rangeMissing = Math.max(0, rangeWorkdaysElapsed - rangeSubmitted);
         // Sum meeting numbers across this employee's reports (Sales only).
         let meetingsCount = 0;
         if (meetingsField) {
@@ -164,9 +142,8 @@ export default function DepartmentPage() {
           totalReports: empReports.length,
           lastDate: last?.date || null,
           submittedToday,
-          weekCount,
-          monthSubmitted,
-          monthMissing,
+          rangeSubmitted,
+          rangeMissing,
           meetingsCount,
         };
       })
@@ -177,7 +154,7 @@ export default function DepartmentPage() {
           (emp.email || "").toLowerCase().includes(q)
         );
       });
-  }, [employees, reports, rangeStart, rangeEnd, query, week, weekTotal, monthRange, elapsedWorkdays, meetingsField]);
+  }, [employees, reports, rangeStart, rangeEnd, query, rangeWorkdaysElapsed, meetingsField]);
 
   if (deptsLoading) {
     return (
@@ -296,7 +273,7 @@ export default function DepartmentPage() {
           <Table.Row>
             <Table.Th className="w-12 text-center">#</Table.Th>
             <Table.Th>Employee</Table.Th>
-            <Table.Th className="whitespace-nowrap text-center" title="Working days this month / days missing">
+            <Table.Th className="whitespace-nowrap text-center" title="Filed / working days in the selected range">
               Working Days
             </Table.Th>
             {meetingsField && (
@@ -312,7 +289,6 @@ export default function DepartmentPage() {
                 ? formatPretty(rangeStart)
                 : `${formatPretty(rangeStart)} → ${formatPretty(rangeEnd)}`}
             </Table.Th>
-            <Table.Th className="whitespace-nowrap text-center">This Week</Table.Th>
             <Table.Th>Total Reports</Table.Th>
             <Table.Th>Last Submission</Table.Th>
             <Table.Th />
@@ -321,13 +297,14 @@ export default function DepartmentPage() {
         <Table.Body>
           {rows.length === 0 ? (
             <Table.Empty
-              colSpan={9}
+              colSpan={meetingsField ? 9 : 8}
               message={query ? "No employees match your search." : "No employees in this department."}
             />
           ) : (
-            rows.flatMap(({ emp, totalReports, lastDate, submittedToday, weekCount, monthSubmitted, monthMissing, meetingsCount }, i) => {
+            rows.flatMap(({ emp, totalReports, lastDate, submittedToday, rangeSubmitted, rangeMissing, meetingsCount }, i) => {
               const isExpanded = expandedId === emp.id;
-              const colCount = meetingsField ? 10 : 9;
+              // Column count dropped by 1 after removing the "This Week" column.
+              const colCount = meetingsField ? 9 : 8;
               const empReports = reports
                 .filter((r) => r.user_id === emp.id)
                 .sort((a, b) => b.date.localeCompare(a.date));
@@ -344,11 +321,11 @@ export default function DepartmentPage() {
                       <span className="text-xs font-medium">{fullName(emp)}</span>
                     </span>
                   </Table.Td>
-                  <Table.Td className="align-top text-center" title={`${monthSubmitted} submitted of ${monthWorkdays} working days this month`}>
+                  <Table.Td className="align-top text-center" title={`${rangeSubmitted} filed of ${rangeWorkdays} working days in range (${rangeMissing} missed)`}>
                     <span className="inline-flex items-center gap-0.5 rounded-full bg-zinc-50 px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-zinc-700 ring-1 ring-zinc-200">
-                      <span className="text-zinc-900">{monthWorkdays}</span>
+                      <span className={rangeSubmitted > 0 ? "text-emerald-700" : "text-zinc-900"}>{rangeSubmitted}</span>
                       <span className="text-zinc-400">/</span>
-                      <span className={monthMissing > 0 ? "text-rose-600" : "text-emerald-600"}>{monthMissing}</span>
+                      <span className="text-zinc-900">{rangeWorkdays}</span>
                     </span>
                   </Table.Td>
                   {meetingsField && (
@@ -367,9 +344,6 @@ export default function DepartmentPage() {
                         Pending
                       </span>
                     )}
-                  </Table.Td>
-                  <Table.Td className="align-top text-center">
-                    <WeekBadge count={weekCount} total={weekTotal} />
                   </Table.Td>
                   <Table.Td className="align-top font-medium text-zinc-800">{totalReports}</Table.Td>
                   <Table.Td className="align-top text-zinc-700">
@@ -575,22 +549,6 @@ function CloseIcon({ className = "" }) {
   );
 }
 
-function WeekBadge({ count, total = 5 }) {
-  const tone =
-    total === 0 ? "bg-zinc-100 text-zinc-500 ring-zinc-200"
-    : count >= total ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    : count >= total - 1 && total >= 2 ? "bg-amber-50 text-amber-800 ring-amber-200"
-    : count > 0 ? "bg-rose-50 text-rose-700 ring-rose-200"
-    : "bg-zinc-100 text-zinc-500 ring-zinc-200";
-  return (
-    <span
-      title={`${count} of ${total} working day${total === 1 ? "" : "s"} submitted so far this week`}
-      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${tone}`}
-    >
-      {count} / {total}
-    </span>
-  );
-}
 
 function Avatar({ name }) {
   const initials = name.split(" ").map((n) => n[0]).slice(0, 2).join("").toUpperCase();
