@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { formatPretty, todayISO } from "@/lib/data";
 import {
@@ -392,6 +393,27 @@ export default function ExpensePage() {
     return source.reduce((sum, e) => sum + (e.advance || 0), 0);
   }, [rawExpenses, isAdmin, viewMode, me, expenses]);
 
+  function downloadMonthlyExcel() {
+    const header = ["Date", "Expense Type", "Travel Type", "Mode", "Site Name", "Amount (₹)", "Advance (₹)", "Net (₹)", "Remarks"];
+    const dataRows = expenses.map((e) => {
+      const expLabel = EXPENSE_TYPES.find((t) => t.value === e.expense_type)?.label || e.expense_type || "";
+      const allTravel = [...TRAVEL_TYPES.filter((t) => t.value !== "other"), ...TRAVEL_SUBTYPES];
+      const travelLabel = allTravel.find((t) => t.value === e.travel_type)?.label || e.travel_type || "";
+      const modeLabel = MODES.find((m) => m.value === e.mode)?.label || e.mode || "";
+      const amt = e.amount || 0;
+      const adv = e.advance || 0;
+      return [e.date || "", expLabel, travelLabel, modeLabel, e.site_name || "", amt, adv, amt - adv, e.remarks || ""];
+    });
+    const totalAmt = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+    const totalAdv = expenses.reduce((s, e) => s + (e.advance || 0), 0);
+    dataRows.push(["TOTAL", "", "", "", "", totalAmt, totalAdv, totalAmt - totalAdv, ""]);
+    const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+    ws["!cols"] = [12, 16, 14, 14, 20, 12, 12, 12, 30].map((w) => ({ wch: w }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Expense Summary");
+    XLSX.writeFile(wb, `expense-summary-${empMonthFilter}.xlsx`);
+  }
+
   return (
     <div className="space-y-4">
       <header className="relative overflow-hidden rounded-lg border border-orange-100 bg-linear-to-br from-orange-50 via-amber-50 to-stone-50 px-4 py-2.5 shadow-soft">
@@ -752,6 +774,19 @@ export default function ExpensePage() {
                 )}
               </>
             )}
+            {empMonthFilter !== "all" && expenses.length > 0 && (
+              <button
+                type="button"
+                onClick={downloadMonthlyExcel}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 text-xs font-medium text-zinc-700 hover:bg-zinc-50 transition-colors whitespace-nowrap"
+                title="Download monthly expense summary as Excel"
+              >
+                <svg viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3 w-3 shrink-0">
+                  <path d="M6 1v7M3 6l3 3 3-3M1 10h10" strokeLinecap="round" strokeLinejoin="round"/>
+                </svg>
+                Excel
+              </button>
+            )}
           </div>
         <ExpenseTable
           rows={expenses}
@@ -878,6 +913,7 @@ export default function ExpensePage() {
       {monthlyOpen && isAdmin && (
         <MonthlySummaryModal
           allExpenses={expenses}
+          monthFilter={monthFilter}
           onClose={() => setMonthlyOpen(false)}
         />
       )}
@@ -1942,11 +1978,16 @@ function BillThumbnail({ expense, onOpen }) {
   );
 }
 
-function MonthlySummaryModal({ allExpenses, onClose }) {
-  // Month picker — defaults to the current calendar month.
+function MonthlySummaryModal({ allExpenses, monthFilter, onClose }) {
+  // Derive year/month from the admin filter bar selection (no in-modal picker).
   const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month, setMonth] = useState(now.getMonth() + 1); // 1..12
+  const [year, month] = useMemo(() => {
+    if (monthFilter && monthFilter !== "all") {
+      const [y, m] = monthFilter.split("-");
+      return [Number(y), Number(m)];
+    }
+    return [now.getFullYear(), now.getMonth() + 1];
+  }, [monthFilter]); // eslint-disable-line react-hooks/exhaustive-deps
   // Per-user notes for this month, fetched from the API on mount + month-
   // change.  Shape: { <userId>: { advance: number, remark: string } }.
   // Edits are persisted optimistically (UI updates first) then PUT'd to
@@ -2089,13 +2130,6 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
     month: "long", year: "numeric",
   });
 
-  // Build a small year list — last 5 years through next year.
-  const years = useMemo(() => {
-    const ys = [];
-    for (let y = now.getFullYear() - 4; y <= now.getFullYear() + 1; y += 1) ys.push(y);
-    return ys;
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
   // Multi-sheet workbook: Overview tab (company total + per-dept totals +
   // per-employee summary) plus one tab per department listing every
   // individual expense in that department for the chosen month.
@@ -2135,32 +2169,11 @@ function MonthlySummaryModal({ allExpenses, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between gap-3 border-b border-zinc-100 bg-orange-50 px-5 py-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <div>
-              <h3 className="text-base font-semibold text-zinc-900">
-                Monthly Expense Summary
-              </h3>
-              <p className="text-xs text-zinc-500">{monthLabel}</p>
-            </div>
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
-            >
-              {[
-                "January","February","March","April","May","June",
-                "July","August","September","October","November","December",
-              ].map((name, i) => (
-                <option key={i + 1} value={i + 1}>{name}</option>
-              ))}
-            </select>
-            <select
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-xs"
-            >
-              {years.map((y) => <option key={y} value={y}>{y}</option>)}
-            </select>
+          <div>
+            <h3 className="text-base font-semibold text-zinc-900">
+              Monthly Expense Summary
+            </h3>
+            <p className="text-xs text-zinc-500">{monthLabel}</p>
           </div>
           <div className="flex items-center gap-2">
             <button

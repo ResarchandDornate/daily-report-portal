@@ -372,12 +372,19 @@ function OverviewContent() {
                 recent.map((r, i) => {
                   const emp = employeesById[r.user_id];
                   const dept = emp?.department;
+                  const isLeave = r.data?.__leave__ === "1";
                   const fields = emp ? getReportFields(emp.department) : [];
-                  const summary = fields
-                    .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
-                    .filter(Boolean)
-                    .slice(0, 2)
-                    .join("  ·  ") || "—";
+                  // Leave rows carry "On Leave" in every field — collapse
+                  // that noise into a single "Absent" pill so HR can see
+                  // the day was accounted for without reading a repeated
+                  // "On Leave · On Leave · …" string.
+                  const summary = isLeave
+                    ? null
+                    : (fields
+                        .map((f) => (r.data?.[f.key] ? `${f.label}: ${r.data[f.key]}` : null))
+                        .filter(Boolean)
+                        .slice(0, 2)
+                        .join("  ·  ") || "—");
                   return (
                     <Table.Row
                       key={r.id}
@@ -402,7 +409,15 @@ function OverviewContent() {
                           {dept?.name || "—"}
                         </span>
                       </Table.Td>
-                      <Table.Td className="max-w-md truncate text-zinc-600">{summary}</Table.Td>
+                      <Table.Td className="max-w-md truncate">
+                        {isLeave ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                            Absent
+                          </span>
+                        ) : (
+                          <span className="text-zinc-600">{summary}</span>
+                        )}
+                      </Table.Td>
                     </Table.Row>
                   );
                 })
@@ -505,9 +520,20 @@ function ReportDetailModal({ report, employee, onClose }) {
           </button>
         </div>
 
-        {/* Body — one line per field */}
+        {/* Body — one line per field.  Leave rows collapse into a single
+            red "Absent" pill so HR isn't reading "On Leave" for every
+            field of a leave day. */}
         <div className="flex-1 overflow-auto bg-white px-5 py-4">
-          {fields.length === 0 ? (
+          {report.data?.__leave__ === "1" ? (
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2.5 py-1 text-sm font-semibold text-rose-700 ring-1 ring-rose-200">
+                Absent
+              </span>
+              <span className="text-[11px] text-zinc-500">
+                Leave recorded for this day — no work fields filled.
+              </span>
+            </div>
+          ) : fields.length === 0 ? (
             <p className="text-xs text-zinc-500">No report fields defined for this department.</p>
           ) : (
             <p className="text-[13px] leading-7 text-zinc-800">
