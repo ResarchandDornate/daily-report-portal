@@ -1464,7 +1464,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
     <Table maxHeight={600}>
       <Table.Head>
         <Table.Row>
-          <Table.Th>Date</Table.Th>
+          <Table.Th>Date of Expense</Table.Th>
           <Table.Th>Employee</Table.Th>
           <Table.Th>Total Amount</Table.Th>
           <Table.Th>Advance</Table.Th>
@@ -1655,6 +1655,33 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+
+  function toggleId(id) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+  function toggleDay(ids) {
+    const allOn = ids.every(id => selectedIds.has(id));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (allOn) ids.forEach(id => next.delete(id));
+      else ids.forEach(id => next.add(id));
+      return next;
+    });
+  }
+  function handleDecide(ids, decision) {
+    ids.forEach(id => onDecide(id, decision));
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.delete(id));
+      return next;
+    });
+  }
+
   // Per-type breakdown (e.g. Material ₹2,500 · Travel ₹1,000 · Others ₹998)
   // shown as chips in the modal header so HR can see at-a-glance where this
   // employee's spend went.
@@ -1725,6 +1752,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
             <Table.Head>
               <Table.Row>
                 <Table.Th>Date</Table.Th>
+                {onDecide && <Table.Th className="w-8" />}
                 <Table.Th>Type</Table.Th>
                 <Table.Th>Mode</Table.Th>
                 <Table.Th>Site</Table.Th>
@@ -1746,7 +1774,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                   dateMap.get(r.date).push(r);
                 }
                 const dateGroups = Array.from(dateMap.entries()).sort(([a], [b]) => b.localeCompare(a));
-                const colCount = onDecide ? 11 : 10;
+                const colCount = onDecide ? 12 : 10;
 
                 return dateGroups.flatMap(([date, rows]) => {
                   const realRows  = rows.filter(r => !(r.amount === 0 && (r.advance || 0) > 0));
@@ -1784,36 +1812,52 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                                 net -₹{Math.abs(dayNet).toLocaleString("en-IN")}
                               </span>
                             )}
-                            {onDecide && pendingExpenses.length > 0 && (
-                              <div className="flex items-center gap-1 border-l border-orange-200 pl-2.5">
-                                <button
-                                  type="button"
-                                  disabled={decidePending}
-                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "rejected"))}
-                                  className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
-                                >
-                                  Reject All
-                                </button>
-                                {!hideOnHold && (
+                            {onDecide && pendingExpenses.length > 0 && (() => {
+                              const daySelected = pendingExpenses.filter(r => selectedIds.has(r.id));
+                              const actOn = daySelected.length > 0 ? daySelected : pendingExpenses;
+                              const suffix = daySelected.length > 0 ? ` (${daySelected.length})` : " All";
+                              const allChecked = pendingExpenses.every(r => selectedIds.has(r.id));
+                              const someChecked = !allChecked && pendingExpenses.some(r => selectedIds.has(r.id));
+                              return (
+                                <div className="flex items-center gap-1 border-l border-orange-200 pl-2.5">
+                                  <label className="flex cursor-pointer items-center gap-1 pr-1" title="Select all for this day">
+                                    <input
+                                      type="checkbox"
+                                      checked={allChecked}
+                                      ref={el => { if (el) el.indeterminate = someChecked; }}
+                                      onChange={() => toggleDay(pendingExpenses.map(r => r.id))}
+                                      className="h-3.5 w-3.5 cursor-pointer rounded border-zinc-300 accent-orange-600"
+                                    />
+                                  </label>
                                   <button
                                     type="button"
                                     disabled={decidePending}
-                                    onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "onhold"))}
-                                    className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                    onClick={() => handleDecide(actOn.map(r => r.id), "rejected")}
+                                    className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                                   >
-                                    Hold All
+                                    Reject{suffix}
                                   </button>
-                                )}
-                                <button
-                                  type="button"
-                                  disabled={decidePending}
-                                  onClick={() => pendingExpenses.forEach(r => onDecide(r.id, "approved"))}
-                                  className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
-                                >
-                                  Approve All
-                                </button>
-                              </div>
-                            )}
+                                  {!hideOnHold && (
+                                    <button
+                                      type="button"
+                                      disabled={decidePending}
+                                      onClick={() => handleDecide(actOn.map(r => r.id), "onhold")}
+                                      className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                    >
+                                      Hold{suffix}
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    disabled={decidePending}
+                                    onClick={() => handleDecide(actOn.map(r => r.id), "approved")}
+                                    className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                  >
+                                    Approve{suffix}
+                                  </button>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </Table.Td>
@@ -1824,6 +1868,18 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                       return (
                         <Table.Row key={r.id} className="bg-white">
                           <Table.Td className="w-px select-none pl-4 text-[11px] text-zinc-300">└</Table.Td>
+                          {onDecide && (
+                            <Table.Td className="w-8 pl-2">
+                              {!isAdvanceRow && r.status === "pending" && (
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.has(r.id)}
+                                  onChange={() => toggleId(r.id)}
+                                  className="h-3.5 w-3.5 cursor-pointer rounded border-zinc-300 accent-orange-600"
+                                />
+                              )}
+                            </Table.Td>
+                          )}
                           <Table.Td>
                             <span className="capitalize">{r.expense_type}</span>
                             {r.travel_type && (
