@@ -47,9 +47,10 @@ const TRAVEL_TYPES = [
 ];
 
 const TRAVEL_SUBTYPES = [
-  { value: "bus",   label: "Bus" },
-  { value: "auto",  label: "Auto" },
-  { value: "metro", label: "Metro" },
+  { value: "bus",      label: "Bus" },
+  { value: "auto",     label: "Auto" },
+  { value: "metro",    label: "Metro" },
+  { value: "rickshaw", label: "Rickshaw" },
 ];
 
 // Per-km reimbursement rate (₹) for vehicles where the company pays by
@@ -437,7 +438,7 @@ export default function ExpensePage() {
                 ₹{totalAmount.toLocaleString("en-IN")}
               </div>
             </div>
-            {isAdmin && viewMode !== "mine" && totalAdvance > 0 && (
+            {totalAdvance > 0 && (
               <>
                 <div className="h-8 w-px bg-orange-200" />
                 <div className="text-right">
@@ -1047,7 +1048,7 @@ function ExpenseForm({ onSubmit, submitting }) {
       }
       if (travelType === "other") {
         if (!travelSubtype) {
-          toast.error("Pick the sub-mode (bus, auto, metro).");
+          toast.error("Pick the sub-mode (bus, auto, metro, rickshaw).");
           return null;
         }
         finalTravelType = travelSubtype;
