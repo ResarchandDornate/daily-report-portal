@@ -132,6 +132,8 @@ export default function ExpensePage() {
   const recordAdvance = useRecordAdvance();
   const [addAdvanceOpen, setAddAdvanceOpen] = useState(false);
   const [empAdvanceOpen, setEmpAdvanceOpen] = useState(false);
+  // { expenseIds: number[], userName?: string } — open Mark Paid modal for these IDs
+  const [markPaidModal, setMarkPaidModal] = useState(null);
 
   // Employee list for the Add Advance modal — derived from rawExpenses so no extra API call.
   const employeeList = useMemo(() => {
@@ -193,7 +195,8 @@ export default function ExpensePage() {
     if (!me) return;
     if (financeFilterSetRef.set) return;
     if (_isFinanceApproverEmail(me.email)) {
-      setStatusFilter("approved");
+      setStatusFilter("approved_paid"); // shows approved + paid rows; pending/rejected stay hidden
+      setMonthFilter("all"); // Shivangi sees all months by default
       financeFilterSetRef.set = true;
     } else {
       financeFilterSetRef.set = true;
@@ -295,7 +298,9 @@ export default function ExpensePage() {
     }
     const q = (search || "").trim().toLowerCase();
     return rawExpenses.filter((e) => {
-      if (statusFilter !== "all" && e.status !== statusFilter) return false;
+      if (statusFilter === "approved_paid") {
+        if (e.status !== "approved" && e.status !== "paid") return false;
+      } else if (statusFilter !== "all" && e.status !== statusFilter) return false;
       if (deptFilter !== "all") {
         // Match against the dept name (we don't get the slug in the expense
         // payload, so name match is the cleanest).
@@ -584,6 +589,7 @@ export default function ExpensePage() {
               className="w-36 rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-xs text-zinc-900"
             >
               <option value="all">All statuses</option>
+              <option value="approved_paid">Approved &amp; Paid</option>
               <option value="pending">Pending</option>
               <option value="onhold">On Hold</option>
               <option value="approved">Approved</option>
@@ -645,20 +651,10 @@ export default function ExpensePage() {
           monthFilter={monthFilter}
           isFinanceApprover={isFinanceApprover}
           markPaidPending={markPaid.isPending}
-          onBatchMarkPaid={async (group) => {
+          onBatchMarkPaid={(group) => {
             const approvedRows = group.expenses.filter((e) => e.status === "approved");
             if (!approvedRows.length) return;
-            if (!confirm(
-              `Mark all ${approvedRows.length} approved expense(s) for `
-              + `${group.userName} as PAID?  This can't be undone.`,
-            )) return;
-            for (const e of approvedRows) {
-              try {
-                await markPaid.mutateAsync(e.id);
-              } catch {
-                /* per-row toast fired by the hook */
-              }
-            }
+            setMarkPaidModal({ expenseIds: approvedRows.map((e) => e.id), userName: group.userName });
           }}
           onOpenEmployee={(group) => {
             const all = rawExpenses
@@ -812,7 +808,7 @@ export default function ExpensePage() {
       )}
 
       {/* Advances panel — per-employee advance totals derived from expense rows. */}
-      {isAdmin && viewMode === "all" && (
+      {isAdmin && (viewMode === "all" || isFinanceApprover) && (
         <AdvancesTable
           items={advanceSummary}
           onAddAdvance={() => setAddAdvanceOpen(true)}
@@ -899,12 +895,8 @@ export default function ExpensePage() {
           // Mark-paid is wired only when the caller is the finance approver
           // — Shivangi clicking through to a single approved row needs the
           // same Paid action as the batch one on the grouped table.
-          onMarkPaid={isFinanceApprover ? async () => {
-            if (!confirm("Mark this approved expense as PAID? This can't be undone.")) return;
-            try {
-              await markPaid.mutateAsync(openModal.id);
-              setOpenModal(null);
-            } catch {}
+          onMarkPaid={isFinanceApprover ? () => {
+            setMarkPaidModal({ expenseIds: [openModal.id], onDone: () => setOpenModal(null) });
           } : undefined}
           markPaidPending={markPaid.isPending}
         />
@@ -916,6 +908,24 @@ export default function ExpensePage() {
           allExpenses={expenses}
           monthFilter={monthFilter}
           onClose={() => setMonthlyOpen(false)}
+        />
+      )}
+
+      {markPaidModal && (
+        <MarkPaidModal
+          expenseCount={markPaidModal.expenseIds.length}
+          userName={markPaidModal.userName}
+          saving={markPaid.isPending}
+          onClose={() => setMarkPaidModal(null)}
+          onSave={async ({ paid_date, payment_ref }) => {
+            for (const id of markPaidModal.expenseIds) {
+              try {
+                await markPaid.mutateAsync({ id, paid_date, payment_ref });
+              } catch { /* per-row toast fired by hook */ }
+            }
+            markPaidModal.onDone?.();
+            setMarkPaidModal(null);
+          }}
         />
       )}
     </div>
@@ -1411,6 +1421,7 @@ function groupExpensesByUser(expenses) {
         withBillsCount: 0,
         latestExpenseDate: e.date,
         latestSubmitAt: e.created_at,
+        latestPaidAt: null,
       });
     }
     const g = byUser.get(key);
@@ -1425,6 +1436,7 @@ function groupExpensesByUser(expenses) {
     if ((e.bills || []).length > 0) g.withBillsCount += 1;
     if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
     if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
+    if (e.paid_at && (!g.latestPaidAt || e.paid_at > g.latestPaidAt)) g.latestPaidAt = e.paid_at;
   }
   // Sort: pending count desc (most-urgent first), then by name.
   return Array.from(byUser.values()).sort((a, b) => {
@@ -1472,14 +1484,15 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
           <Table.Th>Status</Table.Th>
           <Table.Th>Bills</Table.Th>
           <Table.Th>Submit Date</Table.Th>
+          {isFinanceApprover && <Table.Th>Paid Date</Table.Th>}
           <Table.Th className="text-right">Actions</Table.Th>
         </Table.Row>
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={9} message="Loading expenses…" />
+          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="Loading expenses…" />
         ) : groups.length === 0 ? (
-          <Table.Empty colSpan={9} message="No expenses to review yet." />
+          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="No expenses to review yet." />
         ) : (
           groups.map((g) => (
             <Table.Row
@@ -1523,6 +1536,13 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   ? formatPretty(String(g.latestSubmitAt).slice(0, 10))
                   : "—"}
               </Table.Td>
+              {isFinanceApprover && (
+                <Table.Td className="whitespace-nowrap text-zinc-700">
+                  {g.latestPaidAt
+                    ? formatPretty(String(g.latestPaidAt).slice(0, 10))
+                    : "—"}
+                </Table.Td>
+              )}
               <Table.Td className="text-right">
                 {isFinanceApprover ? (
                   // Finance approver (Shivangi) sees a single batch Paid
@@ -3094,6 +3114,66 @@ function AddAdvanceModal({ employees, onClose, onSave, saving }) {
             <button type="submit" disabled={saving || !employeeId || !amount}
               className="rounded-md bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
               {saving ? "Saving…" : "Issue Advance"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function MarkPaidModal({ expenseCount, userName, saving, onClose, onSave }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [paidDate, setPaidDate] = useState(today);
+  const [paymentRef, setPaymentRef] = useState("");
+
+  function handleSubmit(e) {
+    e.preventDefault();
+    onSave({ paid_date: paidDate, payment_ref: paymentRef });
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-sm rounded-lg border border-zinc-200 bg-white shadow-lift" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-zinc-900">Mark as Paid</h3>
+            {userName && (
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {expenseCount} expense{expenseCount !== 1 ? "s" : ""} · {userName}
+              </p>
+            )}
+          </div>
+          <button type="button" onClick={onClose} className="rounded p-1 text-zinc-400 hover:text-zinc-700">✕</button>
+        </div>
+        <form onSubmit={handleSubmit} className="px-4 py-4 flex flex-col gap-3">
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Payment Date</label>
+            <input
+              type="date"
+              value={paidDate}
+              max={today}
+              onChange={(e) => setPaidDate(e.target.value)}
+              required
+              className="w-full rounded-md border border-zinc-300 px-2.5 py-1.5 text-xs text-zinc-900 focus:border-orange-400 focus:outline-none"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">UTR Number <span className="text-zinc-400 font-normal">(optional)</span></label>
+            <input
+              type="text"
+              value={paymentRef}
+              onChange={(e) => setPaymentRef(e.target.value)}
+              placeholder="UTR Number"
+              className="w-full rounded-md border border-zinc-300 px-2.5 py-1.5 text-xs text-zinc-900 placeholder-zinc-400 focus:border-orange-400 focus:outline-none"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="rounded-md border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50">
+              Cancel
+            </button>
+            <button type="submit" disabled={saving || !paidDate} className="rounded-md bg-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-violet-700 disabled:opacity-60">
+              {saving ? "Marking…" : "Mark Paid"}
             </button>
           </div>
         </form>

@@ -537,8 +537,8 @@ export function useAddExpenseBills() {
 export function useMarkPaidExpense() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id) =>
-      api.post(`/api/expenses/${id}/mark-paid`).then((r) => r.data),
+    mutationFn: ({ id, paid_date, payment_ref }) =>
+      api.post(`/api/expenses/${id}/mark-paid`, { paid_date, payment_ref }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkExpenses });
       toast.success("Marked as paid");
