@@ -68,6 +68,7 @@ export default function DashboardLayout({ children }) {
       "/dashboard",
       "/dashboard/my-report",
       "/dashboard/expense",
+      "/dashboard/advance-approval",
     ];
     // Inside Sales and Sales Service employees get one extra page for their
     // calling / customer-service sheets.
@@ -111,7 +112,15 @@ export default function DashboardLayout({ children }) {
   const NAV = [
     { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
     { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
-    { href: "/dashboard/expense", label: "Expense", icon: "wallet", roles: ["hr", "employee"] },
+    {
+      label: "Expense",
+      icon: "wallet",
+      roles: ["hr", "employee"],
+      children: [
+        { href: "/dashboard/expense", label: "My Expenses" },
+        { href: "/dashboard/advance-approval", label: "Advance Approval" },
+      ],
+    },
     {
       href: "/dashboard/sales-uploads",
       label: "Sales Sheets",
