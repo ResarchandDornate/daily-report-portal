@@ -121,6 +121,23 @@ export default function ExpensePage() {
 
   const { data: rawExpenses = [], isLoading } = useExpenses();
   const { data: departments = [] } = useDepartments();
+  // Distinct past site names filed by the CURRENT user — sorted by most
+  // recently used first.  Fed into <datalist> so the New/Edit expense
+  // form autocompletes as the employee types.  Cross-employee names are
+  // deliberately excluded so a Logistics driver's WH names don't leak
+  // into a Sales rep's suggestions.
+  const pastSiteNames = useMemo(() => {
+    if (!me) return [];
+    const seen = new Map();  // lowercase → first-seen original casing
+    for (const e of rawExpenses) {
+      if (e.user_id !== me.id) continue;
+      const s = (e.site_name || "").trim();
+      if (!s) continue;
+      const key = s.toLowerCase();
+      if (!seen.has(key)) seen.set(key, s);
+    }
+    return Array.from(seen.values());
+  }, [rawExpenses, me]);
   const createExpense = useCreateExpense();
   const decideExpense = useDecideExpense();
   const deleteExpense = useDeleteExpense();
@@ -489,6 +506,7 @@ export default function ExpensePage() {
                   setAddExpenseOpen(false);
                 }}
                 submitting={createExpense.isPending}
+                pastSiteNames={pastSiteNames}
               />
             </div>
           </div>
@@ -850,6 +868,7 @@ export default function ExpensePage() {
       {editingRow && (
         <EditExpenseModal
           row={editingRow}
+          pastSiteNames={pastSiteNames}
           onClose={() => setEditingRow(null)}
           onSave={async (patch, newBills) => {
             try {
@@ -932,7 +951,7 @@ export default function ExpensePage() {
   );
 }
 
-function ExpenseForm({ onSubmit, submitting }) {
+function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
   const [date, setDate] = useState(todayISO());
   const [mode, setMode] = useState("cash");
   const [expenseType, setExpenseType] = useState("food");
@@ -1240,8 +1259,18 @@ function ExpenseForm({ onSubmit, submitting }) {
             onChange={(e) => setSiteName(e.target.value)}
             placeholder="e.g. Nhava Sheva WH, Okhla Custom House"
             maxLength={255}
+            list="expense-past-sites"
+            autoComplete="off"
             className={inputClass}
           />
+          {/* Browser-native autocomplete from the employee's own past
+              site names.  Dropdown filters as they type; blank input
+              shows the full list.  Cross-employee names are excluded. */}
+          {pastSiteNames.length > 0 && (
+            <datalist id="expense-past-sites">
+              {pastSiteNames.map((s) => <option key={s} value={s} />)}
+            </datalist>
+          )}
         </Field>
         <Field label="Bills / Receipts (up to 10 — image or PDF)">
           <input
@@ -2552,7 +2581,7 @@ function EditBillThumbnail({ expenseId, index, filename, onRemove }) {
   );
 }
 
-function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill }) {
+function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill, pastSiteNames = [] }) {
   // Pre-fill from the existing expense — every field stays editable so an
   // employee can correct any mistake before approval.  Mirrors the create
   // form: km/rate auto-compute for km-based travel, and a bills section
@@ -2840,8 +2869,15 @@ function EditExpenseModal({ row, onClose, onSave, saving, onDeleteBill }) {
                 onChange={(e) => setSiteName(e.target.value)}
                 placeholder="e.g. Nhava Sheva WH, Okhla Custom House"
                 maxLength={255}
+                list="expense-past-sites-edit"
+                autoComplete="off"
                 className={inputClass}
               />
+              {pastSiteNames.length > 0 && (
+                <datalist id="expense-past-sites-edit">
+                  {pastSiteNames.map((s) => <option key={s} value={s} />)}
+                </datalist>
+              )}
             </Field>
           </div>
           <div className="sm:col-span-2">
