@@ -773,7 +773,7 @@ function DrillRow({ emp, reports, fields, expanded, onToggle, disabled }) {
                     {fields.map((f) => (
                       <td
                         key={f.key}
-                        className="min-w-[160px] border-b border-r border-zinc-100 px-2.5 py-1.5 align-top last:border-r-0"
+                        className="min-w-40 border-b border-r border-zinc-100 px-2.5 py-1.5 align-top last:border-r-0"
                       >
                         {r.data?.[f.key] || "—"}
                       </td>

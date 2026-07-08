@@ -541,7 +541,7 @@ export default function ExpensePage() {
           without filters). */}
       {isAdmin && viewMode === "all" && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 bg-white p-2.5">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative flex-1 min-w-50">
             <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-400">
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="11" cy="11" r="8" />
@@ -1830,7 +1830,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                             )}
                           </Table.Td>
                           <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
-                          <Table.Td className="max-w-[180px] truncate text-zinc-700" title={r.site_name}>
+                          <Table.Td className="max-w-45 truncate text-zinc-700" title={r.site_name}>
                             {r.site_name || "—"}
                           </Table.Td>
                           <Table.Td className="text-right tabular-nums font-medium">
@@ -2318,7 +2318,7 @@ function BillPreviewOverlay({ expense, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/80 p-4"
+      className="fixed inset-0 z-60 flex items-center justify-center bg-zinc-900/80 p-4"
       onClick={onClose}
     >
       <div
@@ -3199,7 +3199,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                   onOpen={(expense) => setPreview(expense)}
                 />
               </Table.Td>
-              <Table.Td className="max-w-[260px] truncate text-zinc-600" title={r.remarks}>
+              <Table.Td className="max-w-65 truncate text-zinc-600" title={r.remarks}>
                 {r.remarks || "—"}
               </Table.Td>
               <Table.Td className="text-right">
@@ -3476,7 +3476,7 @@ function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending
           Supports prev/next navigation when an expense has multiple bills. */}
       {openBillIndex >= 0 && openBill && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/70 p-4"
+          className="fixed inset-0 z-60 flex items-center justify-center bg-zinc-900/70 p-4"
           onClick={() => setOpenBillIndex(-1)}
         >
           <div
