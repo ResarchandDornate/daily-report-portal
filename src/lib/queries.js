@@ -590,3 +590,50 @@ export function useDeleteExpenseBill() {
     onError: (err) => toast.error(err.message || "Failed to remove bill"),
   });
 }
+
+// ── Advance Requests ──────────────────────────────────────────────────────────
+const qkAdvanceRequests = ["advance-requests"];
+
+export function useAdvanceRequests() {
+  return useQuery({
+    queryKey: qkAdvanceRequests,
+    queryFn: () => api.get("/api/advance-requests").then((r) => r.data),
+  });
+}
+
+export function useCreateAdvanceRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body) => api.post("/api/advance-requests", body).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkAdvanceRequests });
+      toast.success("Advance request submitted");
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || err.message || "Failed to submit"),
+  });
+}
+
+export function useDecideAdvanceRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, action, note }) =>
+      api.post(`/api/advance-requests/${id}/decide`, { action, note }).then((r) => r.data),
+    onSuccess: (_, { action }) => {
+      qc.invalidateQueries({ queryKey: qkAdvanceRequests });
+      toast.success(action === "approve" ? "Request approved" : "Request rejected");
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || err.message || "Failed to decide"),
+  });
+}
+
+export function useDeleteAdvanceRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id) => api.delete(`/api/advance-requests/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkAdvanceRequests });
+      toast.success("Request withdrawn");
+    },
+    onError: (err) => toast.error(err.message || "Failed to delete"),
+  });
+}
