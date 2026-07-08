@@ -626,6 +626,19 @@ export function useDecideAdvanceRequest() {
   });
 }
 
+export function useUpdateAdvanceRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }) =>
+      api.patch(`/api/advance-requests/${id}`, body).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qkAdvanceRequests });
+      toast.success("Request updated");
+    },
+    onError: (err) => toast.error(err.response?.data?.detail || err.message || "Failed to update"),
+  });
+}
+
 export function useDeleteAdvanceRequest() {
   const qc = useQueryClient();
   return useMutation({

@@ -6,6 +6,7 @@ import {
   useMe,
   useAdvanceRequests,
   useCreateAdvanceRequest,
+  useUpdateAdvanceRequest,
   useDecideAdvanceRequest,
   useDeleteAdvanceRequest,
 } from "@/lib/queries";
@@ -56,10 +57,31 @@ function fmtDate(d) {
   return `${day}-${m}-${y}`;
 }
 
-// ── Apply Modal ───────────────────────────────────────────────────────────────
-function ApplyModal({ onClose }) {
-  const [form, setForm] = useState(EMPTY_FORM);
+// ── Apply / Edit Modal ────────────────────────────────────────────────────────
+// When `editing` is provided (an existing request row), the modal switches to
+// edit mode: fields pre-fill from the row, and Save issues PATCH instead of
+// POST.  Same form UI either way to avoid duplication.
+function ApplyModal({ onClose, editing }) {
+  const [form, setForm] = useState(() => {
+    if (!editing) return EMPTY_FORM;
+    return {
+      employee_names_raw: (editing.employee_names || []).join(", "),
+      city: editing.city || "",
+      travel_date: editing.travel_date || "",
+      return_date: editing.return_date || "",
+      mode_going: editing.mode_going || "",
+      mode_return: editing.mode_return || "",
+      purpose: editing.purpose || "",
+      accommodation_days: editing.accommodation_days ?? "",
+      accommodation_rate: editing.accommodation_rate ?? "",
+      food_amount: editing.food_amount ?? "",
+      conveyance_days: editing.conveyance_days ?? "",
+      conveyance_rate: editing.conveyance_rate ?? "",
+    };
+  });
   const create = useCreateAdvanceRequest();
+  const update = useUpdateAdvanceRequest();
+  const busy = editing ? update.isPending : create.isPending;
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -74,7 +96,7 @@ function ApplyModal({ onClose }) {
     if (!names.length) { toast.error("Add at least one employee name"); return; }
     if (!form.travel_date || !form.return_date) { toast.error("Enter travel and return dates"); return; }
     if (!form.mode_going || !form.mode_return) { toast.error("Select mode of travel"); return; }
-    await create.mutateAsync({
+    const payload = {
       employee_names: names,
       city: form.city,
       travel_date: form.travel_date,
@@ -89,7 +111,12 @@ function ApplyModal({ onClose }) {
       conveyance_days: Number(form.conveyance_days) || 0,
       conveyance_rate: Number(form.conveyance_rate) || 0,
       total_amount: total,
-    });
+    };
+    if (editing) {
+      await update.mutateAsync({ id: editing.id, ...payload });
+    } else {
+      await create.mutateAsync(payload);
+    }
     onClose();
   }
 
@@ -98,7 +125,9 @@ function ApplyModal({ onClose }) {
       <div className="w-full max-w-5xl bg-white shadow-2xl rounded-xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-3">
-          <h2 className="text-base font-semibold text-zinc-900">Apply for Travel Advance</h2>
+          <h2 className="text-base font-semibold text-zinc-900">
+            {editing ? "Edit Travel Advance Request" : "Apply for Travel Advance"}
+          </h2>
           <button onClick={onClose} className="rounded-md p-1 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-700">
             <CloseIcon className="h-4 w-4" />
           </button>
@@ -327,9 +356,11 @@ function ApplyModal({ onClose }) {
               className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50">
               Cancel
             </button>
-            <button type="submit" disabled={create.isPending}
+            <button type="submit" disabled={busy}
               className="rounded-lg bg-orange-600 px-5 py-2 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-60">
-              {create.isPending ? "Submitting…" : "Submit for Approval"}
+              {busy
+                ? (editing ? "Saving…" : "Submitting…")
+                : (editing ? "Save Changes" : "Submit for Approval")}
             </button>
           </div>
         </form>
@@ -390,7 +421,7 @@ function DecideModal({ req, onClose }) {
 }
 
 // ── Requests Table ────────────────────────────────────────────────────────────
-function RequestsTable({ rows, isLoading, isApprover, onDecide, onDelete }) {
+function RequestsTable({ rows, isLoading, isApprover, meId, onApprove, onReject, onEdit, onDelete, decidePending }) {
   return (
     <div className="border border-zinc-200 rounded-xl overflow-hidden bg-white shadow-sm">
       <div className="overflow-x-auto">
@@ -445,16 +476,30 @@ function RequestsTable({ rows, isLoading, isApprover, onDecide, onDelete }) {
                   <td className="px-4 py-3 text-center">
                     <div className="flex items-center justify-center gap-1.5">
                       {isApprover && req.status === "pending" && (
-                        <button onClick={() => onDecide(req)}
-                          className="rounded bg-orange-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-700">
-                          Review
-                        </button>
+                        <>
+                          <button onClick={() => onApprove(req)}
+                            disabled={decidePending}
+                            className="rounded bg-emerald-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-60">
+                            Approve
+                          </button>
+                          <button onClick={() => onReject(req)}
+                            disabled={decidePending}
+                            className="rounded border border-red-300 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-700 hover:bg-red-100 disabled:opacity-60">
+                            Reject
+                          </button>
+                        </>
                       )}
-                      {req.status === "pending" && (
-                        <button onClick={() => onDelete(req.id)}
-                          className="rounded border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50">
-                          Withdraw
-                        </button>
+                      {!isApprover && req.status === "pending" && req.created_by_id === meId && (
+                        <>
+                          <button onClick={() => onEdit(req)}
+                            className="rounded border border-orange-300 bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-100">
+                            Edit
+                          </button>
+                          <button onClick={() => onDelete(req.id)}
+                            className="rounded border border-zinc-200 px-2.5 py-1 text-xs font-medium text-zinc-600 hover:bg-zinc-50">
+                            Withdraw
+                          </button>
+                        </>
                       )}
                       {req.status !== "pending" && (
                         <span className="text-xs text-zinc-400 italic">
@@ -478,8 +523,11 @@ export default function AdvanceApprovalPage() {
   const { data: me } = useMe();
   const { data: requests = [], isLoading } = useAdvanceRequests();
   const deleteReq = useDeleteAdvanceRequest();
+  const decide = useDecideAdvanceRequest();
 
   const [applyOpen, setApplyOpen] = useState(false);
+  // Non-null when the owner clicks Edit — same modal, edit mode.
+  const [editingReq, setEditingReq] = useState(null);
   const [decideReq, setDecideReq] = useState(null);
   const [filter, setFilter] = useState("all");
   const [search, setSearch] = useState("");
@@ -536,6 +584,21 @@ export default function AdvanceApprovalPage() {
   async function handleDelete(id) {
     if (!confirm("Withdraw this advance request?")) return;
     await deleteReq.mutateAsync(id);
+  }
+
+  async function handleApprove(req) {
+    if (!confirm(`Approve the travel advance of ₹${(req.total_amount || 0).toLocaleString("en-IN")} for ${(req.employee_names || []).join(", ") || "—"}?`)) return;
+    try {
+      await decide.mutateAsync({ id: req.id, action: "approve", note: "" });
+    } catch {}
+  }
+
+  async function handleReject(req) {
+    const note = prompt("Reason for rejection (optional):", "") ?? null;
+    if (note === null) return;  // user cancelled the prompt
+    try {
+      await decide.mutateAsync({ id: req.id, action: "reject", note });
+    } catch {}
   }
 
   const totalAmount = useMemo(() => requests.reduce((s, r) => s + (Number(r.total_amount) || 0), 0), [requests]);
@@ -615,11 +678,21 @@ export default function AdvanceApprovalPage() {
         rows={visible}
         isLoading={isLoading}
         isApprover={isApprover}
-        onDecide={setDecideReq}
+        meId={me?.id}
+        onApprove={handleApprove}
+        onReject={handleReject}
+        onEdit={setEditingReq}
         onDelete={handleDelete}
+        decidePending={decide.isPending}
       />
 
       {applyOpen && <ApplyModal onClose={() => setApplyOpen(false)} />}
+      {editingReq && (
+        <ApplyModal
+          editing={editingReq}
+          onClose={() => setEditingReq(null)}
+        />
+      )}
       {decideReq && <DecideModal req={decideReq} onClose={() => setDecideReq(null)} />}
     </div>
   );
