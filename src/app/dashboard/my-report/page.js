@@ -345,17 +345,28 @@ export default function MyReportPage() {
             {sortedReports.length === 0 ? (
               <Table.Empty colSpan={3 + fields.length} message="No reports yet. Fill in the form above to get started." />
             ) : (
-              sortedReports.map((r, i) => (
+              sortedReports.map((r, i) => {
+                // Leave rows collapse into a single red "Absent" cell so the
+                // employee doesn't see their own "On Leave" repeated across
+                // every field column.
+                const isLeave = r.data?.__leave__ === "1";
+                return (
                 <Table.Row key={r.id}>
                   <Table.Td className="text-center align-top font-medium text-zinc-500">{i + 1}</Table.Td>
                   <Table.Td className="whitespace-nowrap align-top font-medium text-zinc-800">
                     {formatPrettyWithDay(r.date)}
                   </Table.Td>
-                  {fields.map((f) => (
-                    <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">
-                      {r.data?.[f.key] || "—"}
+                  {isLeave ? (
+                    <Table.Td colSpan={fields.length} className="align-top">
+                      <span className="font-bold text-rose-600">Absent</span>
                     </Table.Td>
-                  ))}
+                  ) : (
+                    fields.map((f) => (
+                      <Table.Td key={f.key} className="min-w-60 align-top text-zinc-700">
+                        {r.data?.[f.key] || "—"}
+                      </Table.Td>
+                    ))
+                  )}
                   <Table.Td className="align-top text-right">
                     <button
                       type="button"
@@ -375,7 +386,8 @@ export default function MyReportPage() {
                     </button>
                   </Table.Td>
                 </Table.Row>
-              ))
+                );
+              })
             )}
           </Table.Body>
         </Table>

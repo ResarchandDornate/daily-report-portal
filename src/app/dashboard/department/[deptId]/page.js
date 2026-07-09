@@ -613,25 +613,37 @@ function ExpandedEmployeeReports({ emp, reports, reportFields }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-100">
-            {reports.map((r) => (
-              <tr key={r.id || r.date} className="align-top">
-                <td className="whitespace-nowrap px-2.5 py-1.5 font-medium text-zinc-800">
-                  {formatPretty(r.date)}
-                </td>
-                {cols.map((f) => {
-                  const v = (r.data || {})[f.key];
-                  const s = v == null ? "" : String(v).trim();
-                  return (
-                    <td
-                      key={f.key}
-                      className={`px-2.5 py-1.5 ${s ? "text-zinc-800" : "text-zinc-300"}`}
-                    >
-                      {s || "—"}
+            {reports.map((r) => {
+              // Leave rows collapse all field columns into a single red
+              // "Absent" cell so HR isn't reading the same "On Leave"
+              // repeated across Task / Work Progress / Priorities.
+              const isLeave = r.data?.__leave__ === "1";
+              return (
+                <tr key={r.id || r.date} className="align-top">
+                  <td className="whitespace-nowrap px-2.5 py-1.5 font-medium text-zinc-800">
+                    {formatPretty(r.date)}
+                  </td>
+                  {isLeave ? (
+                    <td colSpan={cols.length} className="px-2.5 py-1.5">
+                      <span className="font-bold text-rose-600">Absent</span>
                     </td>
-                  );
-                })}
-              </tr>
-            ))}
+                  ) : (
+                    cols.map((f) => {
+                      const v = (r.data || {})[f.key];
+                      const s = v == null ? "" : String(v).trim();
+                      return (
+                        <td
+                          key={f.key}
+                          className={`px-2.5 py-1.5 ${s ? "text-zinc-800" : "text-zinc-300"}`}
+                        >
+                          {s || "—"}
+                        </td>
+                      );
+                    })
+                  )}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
