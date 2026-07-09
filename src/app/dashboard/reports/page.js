@@ -765,21 +765,35 @@ function DrillRow({ emp, reports, fields, expanded, onToggle, disabled }) {
                 </tr>
               </thead>
               <tbody>
-                {reports.map((r) => (
-                  <tr key={r.id} className="text-zinc-800 hover:bg-stone-50/60">
-                    <td className="whitespace-nowrap border-b border-r border-zinc-100 px-2.5 py-1.5 font-medium text-zinc-900 last:border-r-0">
-                      {formatPretty(r.date)}
-                    </td>
-                    {fields.map((f) => (
-                      <td
-                        key={f.key}
-                        className="min-w-40 border-b border-r border-zinc-100 px-2.5 py-1.5 align-top last:border-r-0"
-                      >
-                        {r.data?.[f.key] || "—"}
+                {reports.map((r) => {
+                  // Leave rows collapse into a single red "Absent" cell so
+                  // HR isn't reading "On Leave" across every column.
+                  const isLeave = r.data?.__leave__ === "1";
+                  return (
+                    <tr key={r.id} className="text-zinc-800 hover:bg-stone-50/60">
+                      <td className="whitespace-nowrap border-b border-r border-zinc-100 px-2.5 py-1.5 font-medium text-zinc-900 last:border-r-0">
+                        {formatPretty(r.date)}
                       </td>
-                    ))}
-                  </tr>
-                ))}
+                      {isLeave ? (
+                        <td
+                          colSpan={fields.length}
+                          className="min-w-40 border-b border-zinc-100 px-2.5 py-1.5 align-top"
+                        >
+                          <span className="font-bold text-rose-600">Absent</span>
+                        </td>
+                      ) : (
+                        fields.map((f) => (
+                          <td
+                            key={f.key}
+                            className="min-w-40 border-b border-r border-zinc-100 px-2.5 py-1.5 align-top last:border-r-0"
+                          >
+                            {r.data?.[f.key] || "—"}
+                          </td>
+                        ))
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
