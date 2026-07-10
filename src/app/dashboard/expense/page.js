@@ -1927,23 +1927,24 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                               );
                             })()}
                           </div>
-                          {/* Inline remarks — appears as soon as HR checks
-                              a row.  Whatever's typed is attached as
-                              decision_note to the next Reject / Hold /
-                              Approve fired for this day. */}
-                          {onDecide && pendingExpenses.length > 0 && pendingExpenses.some(r => selectedIds.has(r.id)) && (
-                            <div className="flex items-center gap-2 pl-1">
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Remarks</span>
-                              <input
-                                type="text"
-                                value={decisionNote}
-                                onChange={(e) => setDecisionNote(e.target.value)}
-                                maxLength={500}
-                                placeholder="Reason / note for this action (visible to the employee)"
-                                className="flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] text-zinc-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20"
-                              />
-                            </div>
-                          )}
+                        </div>
+                        {/* Inline remarks — appears as soon as HR checks
+                            a row.  Whatever's typed is attached as
+                            decision_note to the next Reject / Hold /
+                            Approve fired for this day. */}
+                        {onDecide && pendingExpenses.length > 0 && pendingExpenses.some(r => selectedIds.has(r.id)) && (
+                          <div className="flex items-center gap-2 pl-1">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Remarks</span>
+                            <input
+                              type="text"
+                              value={decisionNote}
+                              onChange={(e) => setDecisionNote(e.target.value)}
+                              maxLength={500}
+                              placeholder="Reason / note for this action (visible to the employee)"
+                              className="flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] text-zinc-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20"
+                            />
+                          </div>
+                        )}
                         </div>
                       </Table.Td>
                     </Table.Row>,
