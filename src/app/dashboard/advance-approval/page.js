@@ -27,6 +27,7 @@ const EMPTY_FORM = {
   mode_going: "",
   mode_return: "",
   purpose: "",
+  sent_by_manager: "",
   accommodation_days: "",
   accommodation_rate: "",
   food_amount: "",
@@ -72,6 +73,7 @@ function ApplyModal({ onClose, editing }) {
       mode_going: editing.mode_going || "",
       mode_return: editing.mode_return || "",
       purpose: editing.purpose || "",
+      sent_by_manager: editing.sent_by_manager || "",
       accommodation_days: editing.accommodation_days ?? "",
       accommodation_rate: editing.accommodation_rate ?? "",
       food_amount: editing.food_amount ?? "",
@@ -105,6 +107,7 @@ function ApplyModal({ onClose, editing }) {
       mode_going: form.mode_going,
       mode_return: form.mode_return,
       purpose: form.purpose,
+      sent_by_manager: form.sent_by_manager,
       accommodation_days: Number(form.accommodation_days) || 0,
       accommodation_rate: Number(form.accommodation_rate) || 0,
       food_amount: Number(form.food_amount) || 0,
@@ -271,6 +274,25 @@ function ApplyModal({ onClose, editing }) {
                       placeholder="Lilasons Industries, Site Survey-Crompton & Phase 3 MAH"
                       value={form.purpose}
                       onChange={(e) => set("purpose", e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Sent by Manager — free-text name of the manager who
+                    authorised the trip.  Helps HR trace the approval
+                    chain before releasing the advance. */}
+                <div className="grid grid-cols-2 divide-x divide-zinc-100 border-t border-zinc-100">
+                  <div className="px-3 py-3 bg-zinc-50 flex items-center">
+                    <p className="text-xs font-semibold text-zinc-600">Sent by Manager</p>
+                  </div>
+                  <div className="px-3 py-3">
+                    <input
+                      type="text"
+                      maxLength={255}
+                      className="w-full text-sm text-zinc-900 outline-none placeholder:text-zinc-300"
+                      placeholder="e.g. Vikash Kumar"
+                      value={form.sent_by_manager}
+                      onChange={(e) => set("sent_by_manager", e.target.value)}
                     />
                   </div>
                 </div>

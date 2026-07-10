@@ -854,12 +854,18 @@ export default function ExpensePage() {
           group={empModal}
           monthFilter={monthFilter}
           onClose={() => setEmpModal(null)}
-          onDecide={async (id, decision) => {
+          onDecide={async (id, decision, note = "") => {
             try {
-              await decideExpense.mutateAsync({ id, decision, note: "" });
+              await decideExpense.mutateAsync({ id, decision, note });
+            } catch {}
+          }}
+          onUpdateType={async (id, expense_type) => {
+            try {
+              await updateExpense.mutateAsync({ id, expense_type });
             } catch {}
           }}
           decidePending={decideExpense.isPending}
+          updatingType={updateExpense.isPending}
           hideOnHold={isTariniReviewer}
         />
       )}
@@ -1700,11 +1706,15 @@ function StatusMix({ pending, approved, rejected, onHold }) {
   );
 }
 
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePending, hideOnHold }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
+  // Reject-note overlay — set to an array of ids when Reject is clicked;
+  // captures the note before the actual mutations fire.
+  const [rejectIds, setRejectIds] = useState(null);
+  const [rejectNote, setRejectNote] = useState("");
 
   function toggleId(id) {
     setSelectedIds(prev => {
@@ -1722,13 +1732,30 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
       return next;
     });
   }
-  function handleDecide(ids, decision) {
-    ids.forEach(id => onDecide(id, decision));
+  function handleDecide(ids, decision, note = "") {
+    ids.forEach(id => onDecide(id, decision, note));
     setSelectedIds(prev => {
       const next = new Set(prev);
       ids.forEach(id => next.delete(id));
       return next;
     });
+  }
+  // Reject path — always route through the note overlay so HR can attach
+  // a reason (blank is allowed but discouraged).  Confirming the overlay
+  // fires the actual reject mutation with the note.
+  function requestReject(ids) {
+    setRejectIds(ids);
+    setRejectNote("");
+  }
+  function confirmReject() {
+    if (!rejectIds || !rejectIds.length) return;
+    handleDecide(rejectIds, "rejected", rejectNote.trim());
+    setRejectIds(null);
+    setRejectNote("");
+  }
+  function cancelReject() {
+    setRejectIds(null);
+    setRejectNote("");
   }
 
   // Per-type breakdown (e.g. Material ₹2,500 · Travel ₹1,000 · Others ₹998)
@@ -1881,7 +1908,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                                   <button
                                     type="button"
                                     disabled={decidePending}
-                                    onClick={() => handleDecide(actOn.map(r => r.id), "rejected")}
+                                    onClick={() => requestReject(actOn.map(r => r.id))}
                                     className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                                   >
                                     Reject{suffix}
@@ -1930,9 +1957,33 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
                             </Table.Td>
                           )}
                           <Table.Td>
-                            <span className="capitalize">{r.expense_type}</span>
-                            {r.travel_type && (
-                              <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
+                            {onUpdateType && !isAdvanceRow && r.status === "pending" ? (
+                              // HR / Tarini can re-classify a pending row in
+                              // this modal only.  Fires the PATCH mutation
+                              // immediately on change.
+                              <select
+                                value={r.expense_type || "others"}
+                                disabled={updatingType}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  if (next && next !== r.expense_type) {
+                                    onUpdateType(r.id, next);
+                                  }
+                                }}
+                                className="w-full rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[11px] capitalize text-zinc-800 hover:border-orange-300 focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20 disabled:opacity-60"
+                                title="Change expense type"
+                              >
+                                {EXPENSE_TYPES.map((t) => (
+                                  <option key={t.value} value={t.value}>{t.label}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <>
+                                <span className="capitalize">{r.expense_type}</span>
+                                {r.travel_type && (
+                                  <span className="text-[10px] text-zinc-500"> · {r.travel_type}</span>
+                                )}
+                              </>
                             )}
                           </Table.Td>
                           <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
@@ -2004,6 +2055,51 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, decidePe
           expense={preview}
           onClose={() => setPreview(null)}
         />
+      )}
+      {rejectIds && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/50 p-4"
+          onClick={cancelReject}
+        >
+          <div
+            className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-4 shadow-lift"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h4 className="text-sm font-semibold text-zinc-900">
+              Reject {rejectIds.length} expense{rejectIds.length === 1 ? "" : "s"}
+            </h4>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              Add a reason so the employee knows why it was rejected.
+              This note will be visible to them.
+            </p>
+            <textarea
+              autoFocus
+              value={rejectNote}
+              onChange={(e) => setRejectNote(e.target.value)}
+              rows={4}
+              maxLength={500}
+              placeholder="e.g. Bill unclear, please re-upload with a legible image"
+              className="mt-2.5 w-full rounded-md border border-zinc-300 bg-white px-2.5 py-2 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
+            />
+            <div className="mt-3 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={cancelReject}
+                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmReject}
+                disabled={decidePending}
+                className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+              >
+                {decidePending ? "Rejecting…" : "Confirm Reject"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
