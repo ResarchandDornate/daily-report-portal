@@ -1711,10 +1711,10 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
-  // Reject-note overlay — set to an array of ids when Reject is clicked;
-  // captures the note before the actual mutations fire.
-  const [rejectIds, setRejectIds] = useState(null);
-  const [rejectNote, setRejectNote] = useState("");
+  // Inline decision-note state.  HR can start typing the moment she
+  // checks any row; the note gets attached to whichever action (Reject
+  // / Hold / Approve) fires next.  Cleared after the mutation runs.
+  const [decisionNote, setDecisionNote] = useState("");
 
   function toggleId(id) {
     setSelectedIds(prev => {
@@ -1739,23 +1739,8 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
       ids.forEach(id => next.delete(id));
       return next;
     });
-  }
-  // Reject path — always route through the note overlay so HR can attach
-  // a reason (blank is allowed but discouraged).  Confirming the overlay
-  // fires the actual reject mutation with the note.
-  function requestReject(ids) {
-    setRejectIds(ids);
-    setRejectNote("");
-  }
-  function confirmReject() {
-    if (!rejectIds || !rejectIds.length) return;
-    handleDecide(rejectIds, "rejected", rejectNote.trim());
-    setRejectIds(null);
-    setRejectNote("");
-  }
-  function cancelReject() {
-    setRejectIds(null);
-    setRejectNote("");
+    // Clear the inline note after firing so the next decision starts clean.
+    setDecisionNote("");
   }
 
   // Per-type breakdown (e.g. Material ₹2,500 · Travel ₹1,000 · Others ₹998)
@@ -1838,6 +1823,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                 <Table.Th>Status</Table.Th>
                 <Table.Th>Bill</Table.Th>
                 <Table.Th>Remarks</Table.Th>
+                <Table.Th>Decision Note</Table.Th>
                 {onDecide && <Table.Th className="text-right">Action</Table.Th>}
               </Table.Row>
             </Table.Head>
@@ -1850,7 +1836,12 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                   dateMap.get(r.date).push(r);
                 }
                 const dateGroups = Array.from(dateMap.entries()).sort(([a], [b]) => b.localeCompare(a));
-                const colCount = onDecide ? 12 : 10;
+                // Column count for the day-header colspan.  Base columns:
+                // Date · Type · Mode · Site · Amount · Advance · Subtotal ·
+                // Status · Bill · Remarks · Decision Note = 11.  With
+                // action mode ON we add the per-row checkbox cell + the
+                // trailing action cell = 13.
+                const colCount = onDecide ? 13 : 11;
 
                 return dateGroups.flatMap(([date, rows]) => {
                   const realRows  = rows.filter(r => !(r.amount === 0 && (r.advance || 0) > 0));
@@ -1866,6 +1857,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                     // ── Date group header row — one set of action buttons per day ──
                     <Table.Row key={`hdr-${date}`} className="bg-orange-50/60 border-t-2 border-orange-100">
                       <Table.Td colSpan={colCount} className="px-4 py-1.5">
+                        <div className="flex flex-col gap-1.5">
                         <div className="flex items-center gap-3">
                           <span className="font-semibold text-[13px] text-zinc-800">
                             {formatPretty(date)}
@@ -1908,7 +1900,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                   <button
                                     type="button"
                                     disabled={decidePending}
-                                    onClick={() => requestReject(actOn.map(r => r.id))}
+                                    onClick={() => handleDecide(actOn.map(r => r.id), "rejected", decisionNote.trim())}
                                     className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
                                   >
                                     Reject{suffix}
@@ -1917,7 +1909,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                     <button
                                       type="button"
                                       disabled={decidePending}
-                                      onClick={() => handleDecide(actOn.map(r => r.id), "onhold")}
+                                      onClick={() => handleDecide(actOn.map(r => r.id), "onhold", decisionNote.trim())}
                                       className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
                                     >
                                       Hold{suffix}
@@ -1926,7 +1918,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                   <button
                                     type="button"
                                     disabled={decidePending}
-                                    onClick={() => handleDecide(actOn.map(r => r.id), "approved")}
+                                    onClick={() => handleDecide(actOn.map(r => r.id), "approved", decisionNote.trim())}
                                     className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
                                   >
                                     Approve{suffix}
@@ -1935,6 +1927,23 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                               );
                             })()}
                           </div>
+                          {/* Inline remarks — appears as soon as HR checks
+                              a row.  Whatever's typed is attached as
+                              decision_note to the next Reject / Hold /
+                              Approve fired for this day. */}
+                          {onDecide && pendingExpenses.length > 0 && pendingExpenses.some(r => selectedIds.has(r.id)) && (
+                            <div className="flex items-center gap-2 pl-1">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Remarks</span>
+                              <input
+                                type="text"
+                                value={decisionNote}
+                                onChange={(e) => setDecisionNote(e.target.value)}
+                                maxLength={500}
+                                placeholder="Reason / note for this action (visible to the employee)"
+                                className="flex-1 rounded-md border border-zinc-300 bg-white px-2.5 py-1 text-[11px] text-zinc-900 outline-none focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20"
+                              />
+                            </div>
+                          )}
                         </div>
                       </Table.Td>
                     </Table.Row>,
@@ -2015,6 +2024,25 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                           <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
                             {r.remarks || "—"}
                           </Table.Td>
+                          {/* Decision Note — the note HR / Tarini attached
+                              when they approved, held, or rejected the row.
+                              Colour tint matches the decision so it reads
+                              at a glance. */}
+                          <Table.Td className="max-w-[240px] whitespace-pre-wrap" title={r.decision_note}>
+                            {r.decision_note ? (
+                              <span className={
+                                r.status === "rejected"
+                                  ? "text-rose-700"
+                                  : r.status === "onhold"
+                                    ? "text-sky-700"
+                                    : "text-emerald-700"
+                              }>
+                                {r.decision_note}
+                              </span>
+                            ) : (
+                              <span className="text-zinc-300">—</span>
+                            )}
+                          </Table.Td>
                           {onDecide && <Table.Td />}
                         </Table.Row>
                       );
@@ -2055,51 +2083,6 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
           expense={preview}
           onClose={() => setPreview(null)}
         />
-      )}
-      {rejectIds && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-zinc-900/50 p-4"
-          onClick={cancelReject}
-        >
-          <div
-            className="w-full max-w-md rounded-lg border border-zinc-200 bg-white p-4 shadow-lift"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h4 className="text-sm font-semibold text-zinc-900">
-              Reject {rejectIds.length} expense{rejectIds.length === 1 ? "" : "s"}
-            </h4>
-            <p className="mt-1 text-[11px] text-zinc-500">
-              Add a reason so the employee knows why it was rejected.
-              This note will be visible to them.
-            </p>
-            <textarea
-              autoFocus
-              value={rejectNote}
-              onChange={(e) => setRejectNote(e.target.value)}
-              rows={4}
-              maxLength={500}
-              placeholder="e.g. Bill unclear, please re-upload with a legible image"
-              className="mt-2.5 w-full rounded-md border border-zinc-300 bg-white px-2.5 py-2 text-xs text-zinc-900 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20"
-            />
-            <div className="mt-3 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={cancelReject}
-                className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirmReject}
-                disabled={decidePending}
-                className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
-              >
-                {decidePending ? "Rejecting…" : "Confirm Reject"}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
     </div>
   );
@@ -3413,15 +3396,16 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
           <Table.Th>Status</Table.Th>
           <Table.Th>Bill</Table.Th>
           <Table.Th>Remarks</Table.Th>
+          <Table.Th>Decision Note</Table.Th>
           <Table.Th className="text-right">{isAdmin ? "" : "Action"}</Table.Th>
         </Table.Row>
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={isAdmin ? 11 : 10} message="Loading expenses…" />
+          <Table.Empty colSpan={isAdmin ? 12 : 11} message="Loading expenses…" />
         ) : rows.length === 0 ? (
           <Table.Empty
-            colSpan={isAdmin ? 11 : 10}
+            colSpan={isAdmin ? 12 : 11}
             message={isAdmin ? "No expenses to review yet." : "You haven't submitted any expenses yet."}
           />
         ) : (
@@ -3470,6 +3454,24 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
               </Table.Td>
               <Table.Td className="max-w-65 truncate text-zinc-600" title={r.remarks}>
                 {r.remarks || "—"}
+              </Table.Td>
+              {/* Decision Note — the note HR / Tarini attached with their
+                  decision.  Colour matches the row's status so employees
+                  can spot the reason on rejected / held rows quickly. */}
+              <Table.Td className="max-w-[180px] truncate" title={r.decision_note}>
+                {r.decision_note ? (
+                  <span className={
+                    r.status === "rejected"
+                      ? "text-rose-700"
+                      : r.status === "onhold"
+                        ? "text-sky-700"
+                        : "text-emerald-700"
+                  }>
+                    {r.decision_note}
+                  </span>
+                ) : (
+                  <span className="text-zinc-300">—</span>
+                )}
               </Table.Td>
               <Table.Td className="text-right">
                 {isAdmin ? (
