@@ -760,7 +760,18 @@ export default function AdvanceApprovalPage() {
     } catch {}
   }
 
-  const totalAmount = useMemo(() => requests.reduce((s, r) => s + (Number(r.total_amount) || 0), 0), [requests]);
+  // Sum each row's effective total (parts if the stored total_amount is
+  // ₹0 — covers legacy rows submitted before the form was flattened).
+  const totalAmount = useMemo(
+    () => requests.reduce((s, r) => {
+      const parts = legacyFlatAmount(r.accommodation_days, r.accommodation_rate)
+        + (Number(r.food_amount) || 0)
+        + legacyFlatAmount(r.conveyance_days, r.conveyance_rate);
+      const stored = Number(r.total_amount) || 0;
+      return s + (parts > 0 ? parts : stored);
+    }, 0),
+    [requests],
+  );
 
   return (
     <div className="space-y-4">
