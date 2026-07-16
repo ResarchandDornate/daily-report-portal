@@ -68,6 +68,7 @@ export default function DashboardLayout({ children }) {
       "/dashboard",
       "/dashboard/my-report",
       "/dashboard/expense",
+      "/dashboard/expense/summary",
       "/dashboard/advance-approval",
     ];
     // Inside Sales and Sales Service employees get one extra page for their
@@ -118,6 +119,7 @@ export default function DashboardLayout({ children }) {
       roles: ["hr", "employee"],
       children: [
         { href: "/dashboard/expense", label: "My Expenses" },
+        { href: "/dashboard/expense/summary", label: "Summary Expense" },
         { href: "/dashboard/advance-approval", label: "Advance Approval" },
       ],
     },

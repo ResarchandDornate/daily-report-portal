@@ -629,8 +629,8 @@ export default function ExpensePage() {
               </button>
             )}
           </div>
-          {/* Monthly Summary trigger lives alongside the filters so all the
-              admin tools sit in one row. */}
+          {/* Monthly Summary trigger — yearly view has moved to its own
+              sub-page under Expense › Summary Expense. */}
           <button
             type="button"
             onClick={() => setMonthlyOpen(true)}
@@ -1481,7 +1481,41 @@ function groupExpensesByUser(expenses) {
 }
 
 function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, onBatchMarkPaid, markPaidPending }) {
-  const groups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
+  const baseGroups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
+  // 3-click sort cycle: unclicked → asc → desc → null (reset).  When
+  // sortKey is null we fall back to the default order returned by
+  // groupExpensesByUser (pending count desc, then name).
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState(null);
+  function toggleSort(key) {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc")  { setSortDir("desc"); return; }
+    if (sortDir === "desc") { setSortKey(null); setSortDir(null); return; }
+    setSortDir("asc");
+  }
+  const groups = useMemo(() => {
+    if (!sortKey || !sortDir) return baseGroups;
+    const keyed = baseGroups.map((g) => {
+      const subtotal = (g.total || 0) - (g.advance || 0);
+      const values = {
+        date:    g.latestExpenseDate || "",
+        name:    (g.userName || "").toLowerCase(),
+        total:   g.total || 0,
+        advance: g.advance || 0,
+        subtotal,
+        bills:   g.withBillsCount || 0,
+        submit:  g.latestSubmitAt || "",
+      };
+      return { g, v: values[sortKey] };
+    });
+    keyed.sort((a, b) => {
+      if (a.v === b.v) return 0;
+      const cmp = a.v > b.v ? 1 : -1;
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+    return keyed.map((k) => k.g);
+  }, [baseGroups, sortKey, sortDir]);
+
   // Totals across whatever the parent has already filtered to (usually the
   // current month).  Shown as a footer row so the user can see the visible
   // total without scanning every row.
@@ -1494,6 +1528,26 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
     }
     return { amount, advance, subtotal: amount - advance };
   }, [groups]);
+
+  // Sortable header cell — shows a small ↑/↓ indicator on the active
+  // column and dims non-active columns' arrows to hint they're clickable.
+  const SortTh = ({ col, children, align = "left" }) => {
+    const active = sortKey === col;
+    const arrow = !active ? "↕" : (sortDir === "asc" ? "↑" : "↓");
+    return (
+      <Table.Th className={align === "right" ? "text-right" : undefined}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); toggleSort(col); }}
+          className={`inline-flex items-center gap-1 select-none ${align === "right" ? "flex-row-reverse" : ""} ${active ? "text-orange-700" : "text-inherit"} hover:text-orange-700`}
+          title="Click to sort — 3rd click resets"
+        >
+          {children}
+          <span className={`text-[10px] ${active ? "opacity-100" : "opacity-40"}`}>{arrow}</span>
+        </button>
+      </Table.Th>
+    );
+  };
   // Month label for the footer.  "All months" when no specific month is
   // selected; otherwise e.g. "June 2026".
   const monthLabel = useMemo(() => {
@@ -1511,14 +1565,14 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
     <Table maxHeight={600}>
       <Table.Head>
         <Table.Row>
-          <Table.Th>Date of Expense</Table.Th>
-          <Table.Th>Employee</Table.Th>
-          <Table.Th>Total Amount</Table.Th>
-          <Table.Th>Advance</Table.Th>
-          <Table.Th>Subtotal</Table.Th>
+          <SortTh col="date">Date of Expense</SortTh>
+          <SortTh col="name">Employee</SortTh>
+          <SortTh col="total">Total Amount</SortTh>
+          <SortTh col="advance">Advance</SortTh>
+          <SortTh col="subtotal">Subtotal</SortTh>
           <Table.Th>Status</Table.Th>
-          <Table.Th>Bills</Table.Th>
-          <Table.Th>Submit Date</Table.Th>
+          <SortTh col="bills">Bills</SortTh>
+          <SortTh col="submit">Submit Date</SortTh>
           {isFinanceApprover && <Table.Th>Paid Date</Table.Th>}
           <Table.Th className="text-right">Actions</Table.Th>
         </Table.Row>
@@ -2511,18 +2565,37 @@ function BillPreviewOverlay({ expense, onClose }) {
         className="relative flex flex-col items-center gap-3"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Counter + close */}
+        {/* Counter + download + close.  Download re-uses the already-
+            loaded blob URL for the visible bill, so it's instant and
+            doesn't hit the server a second time.  When the bill is still
+            loading (or failed), the button disables itself. */}
         <div className="flex w-full items-center justify-between px-1">
           <span className="text-xs font-medium text-white/80">
             {billCount > 1 ? `${index + 1} / ${billCount}` : "1 bill"}
           </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md bg-zinc-900/60 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-900/80"
-          >
-            Close
-          </button>
+          <div className="flex items-center gap-2">
+            <a
+              href={currentUrl || undefined}
+              download={currentFilename || `bill-${index + 1}`}
+              aria-disabled={!currentUrl}
+              onClick={(e) => { if (!currentUrl) e.preventDefault(); }}
+              className={`rounded-md px-2 py-1 text-xs font-medium text-white ${
+                currentUrl
+                  ? "bg-orange-600 hover:bg-orange-700"
+                  : "bg-zinc-500/60 cursor-not-allowed pointer-events-none"
+              }`}
+              title={currentUrl ? `Download ${currentFilename || "this bill"}` : "Bill still loading"}
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md bg-zinc-900/60 px-2 py-1 text-xs font-medium text-white hover:bg-zinc-900/80"
+            >
+              Close
+            </button>
+          </div>
         </div>
 
         {/* Image / PDF */}
