@@ -101,6 +101,18 @@ function _isFinanceApproverEmail(email) {
   );
 }
 
+// Project coordinators — read-only cross-employee view, scoped by the server
+// to just their team.  They can VIEW their team's expenses/advances but have
+// no approve / reject / hold / mark-paid actions.  Mirror of the backend's
+// PROJECT_COORDINATORS map (keys only — the server enforces the team list).
+const COORDINATOR_LOCALS = ["arman"];
+function _isCoordinatorEmail(email) {
+  const local = (email || "").trim().toLowerCase().split("@")[0] || "";
+  return COORDINATOR_LOCALS.some(
+    (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
+  );
+}
+
 export default function ExpensePage() {
   const { data: me } = useMe();
   // Finance approvers get the admin (cross-employee) view too — they need to
@@ -109,11 +121,18 @@ export default function ExpensePage() {
     if (!me) return false;
     return _isFinanceApproverEmail(me.email);
   }, [me]);
+  // Project coordinator (Arman) — read-only view of their team; the server
+  // returns only the team's rows, so the admin table is naturally scoped.
+  const isCoordinator = useMemo(() => {
+    if (!me) return false;
+    return _isCoordinatorEmail(me.email);
+  }, [me]);
   const isAdmin = useMemo(() => {
     if (!me) return false;
     if (me.role === "hr") return true;
     if (_isApproverEmail(me.email)) return true;
-    return _isFinanceApproverEmail(me.email);
+    if (_isFinanceApproverEmail(me.email)) return true;
+    return _isCoordinatorEmail(me.email);
   }, [me]);
   // Tarini's account is review-only — she doesn't file her own expenses
   // through this form.  Smita + HR still get the form because they can.
@@ -217,6 +236,9 @@ export default function ExpensePage() {
     if (_isFinanceApproverEmail(me.email)) {
       setStatusFilter("approved_paid"); // shows approved + paid rows; pending/rejected stay hidden
       setMonthFilter("all"); // Shivangi sees all months by default
+      financeFilterSetRef.set = true;
+    } else if (_isCoordinatorEmail(me.email)) {
+      setMonthFilter("all"); // coordinator sees their whole team across all months
       financeFilterSetRef.set = true;
     } else {
       financeFilterSetRef.set = true;
@@ -533,7 +555,7 @@ export default function ExpensePage() {
           expenses), so the "My Expenses" tab is hidden for her — she
           stays in the company-wide view permanently.  Regular employees
           never see this toggle either. */}
-      {isAdmin && !isTariniReviewer && (
+      {isAdmin && !isTariniReviewer && !isCoordinator && (
         <div className="flex items-center gap-1 rounded-md border border-zinc-200 bg-white p-1 w-fit">
           <button
             type="button"
@@ -671,6 +693,7 @@ export default function ExpensePage() {
           hideOnHold={isTariniReviewer}
           monthFilter={monthFilter}
           isFinanceApprover={isFinanceApprover}
+          isCoordinator={isCoordinator}
           markPaidPending={markPaid.isPending}
           onBatchMarkPaid={(group) => {
             const approvedRows = group.expenses.filter((e) => e.status === "approved");
@@ -770,8 +793,8 @@ export default function ExpensePage() {
             </div>
             {/* Action buttons — outside the bar, right side.
                 Finance (Shivangi, Saif) file their own expenses like anyone
-                else; only Tarini's account is review-only. */}
-            {!isTariniReviewer && (
+                else; Tarini (reviewer) and coordinators (read-only) don't. */}
+            {!isTariniReviewer && !isCoordinator && (
               <>
                 <button
                   type="button"
@@ -835,7 +858,7 @@ export default function ExpensePage() {
       {isAdmin && viewMode === "all" && (
         <AdvancesTable
           items={advanceSummary}
-          onAddAdvance={() => setAddAdvanceOpen(true)}
+          onAddAdvance={isCoordinator ? undefined : () => setAddAdvanceOpen(true)}
         />
       )}
 
@@ -860,9 +883,10 @@ export default function ExpensePage() {
           group={empModal}
           monthFilter={monthFilter}
           onClose={() => setEmpModal(null)}
-          // Finance approvers disburse but never decide — withholding onDecide
-          // strips the approve / reject / hold controls from the modal.
-          onDecide={isFinanceApprover ? undefined : async (id, decision, note = "") => {
+          // Finance approvers disburse but never decide, and coordinators are
+          // fully read-only — withholding onDecide strips the approve / reject /
+          // hold controls from the modal.
+          onDecide={(isFinanceApprover || isCoordinator) ? undefined : async (id, decision, note = "") => {
             try {
               await decideExpense.mutateAsync({ id, decision, note });
             } catch {}
@@ -871,7 +895,7 @@ export default function ExpensePage() {
             setMarkPaidModal({ expenseIds });
           } : undefined}
           markPaidPending={markPaid.isPending}
-          onUpdateType={async (id, expense_type) => {
+          onUpdateType={isCoordinator ? undefined : async (id, expense_type) => {
             try {
               await updateExpense.mutateAsync({ id, expense_type });
             } catch {}
@@ -1676,7 +1700,7 @@ col.c8{width:120px} col.c9{width:auto}
   doc.save(`Expense_${safeName}_${periodLabel.replace(/\s+/g, "_")}.pdf`);
 }
 
-function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, onBatchMarkPaid, markPaidPending }) {
+function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, isCoordinator, onBatchMarkPaid, markPaidPending }) {
   const baseGroups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
   // 3-click sort cycle: unclicked → asc → desc → null (reset).  When
   // sortKey is null we fall back to the default order returned by
@@ -1840,7 +1864,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 >
                   ⬇ PDF
                 </button>
-                {isFinanceApprover ? (
+                {/* Coordinators are read-only: PDF + Open only, no decisions. */}
+                {isCoordinator ? null : isFinanceApprover ? (
                   // Finance approver (Shivangi) sees a single batch Paid
                   // action that fires for every approved expense in this
                   // employee's group.  No approve / reject controls.
