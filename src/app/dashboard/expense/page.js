@@ -90,18 +90,21 @@ function _isTariniEmail(email) {
   return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
 }
 
-// Finance approver (Shivangi) — the only account that can mark an
+// Finance approvers (Shivangi, Saif) — the accounts that can mark an
 // approved expense as paid.  Same prefix-match style as the others so
 // `shivangi.singh@…` etc. still resolve.
+const FINANCE_APPROVER_LOCALS = ["shivangi", "saif"];
 function _isFinanceApproverEmail(email) {
   const local = (email || "").trim().toLowerCase().split("@")[0] || "";
-  return local === "shivangi" || local.startsWith("shivangi.") || local.startsWith("shivangi_");
+  return FINANCE_APPROVER_LOCALS.some(
+    (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"),
+  );
 }
 
 export default function ExpensePage() {
   const { data: me } = useMe();
-  // Shivangi gets the admin (cross-employee) view too — she needs to see
-  // every approved expense to mark each one paid.
+  // Finance approvers get the admin (cross-employee) view too — they need to
+  // see every approved expense to mark each one paid.
   const isFinanceApprover = useMemo(() => {
     if (!me) return false;
     return _isFinanceApproverEmail(me.email);
@@ -765,8 +768,10 @@ export default function ExpensePage() {
                 </span>
               </div>
             </div>
-            {/* Action buttons — outside the bar, right side */}
-            {!isTariniReviewer && !isFinanceApprover && (
+            {/* Action buttons — outside the bar, right side.
+                Finance (Shivangi, Saif) file their own expenses like anyone
+                else; only Tarini's account is review-only. */}
+            {!isTariniReviewer && (
               <>
                 <button
                   type="button"
@@ -825,8 +830,9 @@ export default function ExpensePage() {
         </>
       )}
 
-      {/* Advances panel — per-employee advance totals derived from expense rows. */}
-      {isAdmin && (viewMode === "all" || isFinanceApprover) && (
+      {/* Advances panel — per-employee advance totals derived from expense rows.
+          Company-wide data, so it belongs to the All Employees view only. */}
+      {isAdmin && viewMode === "all" && (
         <AdvancesTable
           items={advanceSummary}
           onAddAdvance={() => setAddAdvanceOpen(true)}
@@ -854,11 +860,17 @@ export default function ExpensePage() {
           group={empModal}
           monthFilter={monthFilter}
           onClose={() => setEmpModal(null)}
-          onDecide={async (id, decision, note = "") => {
+          // Finance approvers disburse but never decide — withholding onDecide
+          // strips the approve / reject / hold controls from the modal.
+          onDecide={isFinanceApprover ? undefined : async (id, decision, note = "") => {
             try {
               await decideExpense.mutateAsync({ id, decision, note });
             } catch {}
           }}
+          onMarkPaid={isFinanceApprover ? (expenseIds) => {
+            setMarkPaidModal({ expenseIds });
+          } : undefined}
+          markPaidPending={markPaid.isPending}
           onUpdateType={async (id, expense_type) => {
             try {
               await updateExpense.mutateAsync({ id, expense_type });
@@ -1480,6 +1492,190 @@ function groupExpensesByUser(expenses) {
   });
 }
 
+// Render the employee's expenses to an offscreen iframe, snapshot it with
+// html2canvas and slice the bitmap across A4 pages.  Going through the
+// browser's own renderer is what keeps the rupee sign intact — jsPDF's core
+// fonts are Latin-1 and turn ₹ into garbage.  Imports are dynamic so these
+// two heavy libs stay out of the initial bundle and off the server render.
+async function downloadEmployeePDF(group, monthFilter) {
+  const { default: jsPDF } = await import("jspdf");
+  const { default: html2canvas } = await import("html2canvas");
+
+  const expRows = group.expenses.slice().sort((a, b) => (a.date < b.date ? -1 : 1));
+  const allTravel = [...TRAVEL_TYPES.filter((t) => t.value !== "other"), ...TRAVEL_SUBTYPES];
+  const typeLabel = (e) => {
+    const t = EXPENSE_TYPES.find((x) => x.value === e.expense_type)?.label || e.expense_type || "—";
+    if (e.expense_type === "travel" && e.travel_type) {
+      const tl = allTravel.find((x) => x.value === e.travel_type)?.label || e.travel_type;
+      return `${t} · ${tl}`;
+    }
+    return t;
+  };
+  const modeLabel = (e) => MODES.find((x) => x.value === e.mode)?.label || e.mode || "—";
+  const STATUS_LABEL = { pending: "Pending", approved: "Approved", rejected: "Rejected", onhold: "On Hold", paid: "Paid" };
+  const fmtINR = (n) => `₹${(n || 0).toLocaleString("en-IN")}`;
+  const periodLabel = (() => {
+    if (!monthFilter || monthFilter === "all") return "All months";
+    const [y, m] = monthFilter.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
+  })();
+  const today = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+  const netPayable = group.total - group.advance;
+
+  const rowsHtml = expRows.map((e, i) => {
+    const sub = (e.amount || 0) - (e.advance || 0);
+    return `<tr>
+      <td style="text-align:center">${i + 1}</td>
+      <td>${e.date || "—"}</td>
+      <td>${typeLabel(e)}</td>
+      <td>${modeLabel(e)}</td>
+      <td style="text-align:right">${fmtINR(e.amount)}</td>
+      <td style="text-align:right">${(e.advance || 0) > 0 ? fmtINR(e.advance) : "—"}</td>
+      <td style="text-align:right;${sub < 0 ? "color:#dc2626;font-weight:600" : "color:#059669;font-weight:600"}">${sub < 0 ? "-₹" + Math.abs(sub).toLocaleString("en-IN") : fmtINR(sub)}</td>
+      <td>${STATUS_LABEL[e.status] || e.status || "—"}</td>
+      <td>${e.site_name || "—"}</td>
+      <td>${e.remarks || "—"}</td>
+    </tr>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:11px;color:#111;background:#fff;padding:28px 32px;width:1400px}
+.hdr{display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:12px;border-bottom:2.5px solid #ea580c;margin-bottom:16px}
+.co{font-size:20px;font-weight:700;color:#ea580c;line-height:1.1}
+.doc{font-size:13px;font-weight:600;margin-top:3px}
+.gen{font-size:10px;color:#999;margin-top:2px}
+.emp{text-align:right}
+.emp-name{font-size:14px;font-weight:700}
+.emp-dept{font-size:10px;color:#666;margin-top:1px}
+.emp-period{font-size:10px;color:#555;margin-top:2px}
+table{width:100%;border-collapse:collapse;font-size:10.5px}
+th{background:#ea580c;color:#fff;padding:7px 8px;text-align:left;font-weight:600;font-size:10.5px;white-space:nowrap}
+th.r{text-align:right}
+td{padding:6px 8px;border-bottom:1px solid #e5e7eb;vertical-align:top;word-break:break-word}
+tr:nth-child(even) td{background:#fafafa}
+tfoot td{font-weight:700;background:#fff7ed;border-top:2px solid #ea580c;padding:7px 8px;font-size:11px}
+.summary{display:flex;justify-content:flex-end;margin-top:18px}
+.sbox{border:1px solid #e5e7eb;border-radius:6px;padding:12px 16px;min-width:220px}
+.sr{display:flex;justify-content:space-between;gap:32px;padding:3px 0;font-size:11px;color:#555}
+.sr span:last-child{font-weight:600;color:#111}
+.divider{border-top:1px solid #e5e7eb;margin:6px 0}
+.net{display:flex;justify-content:space-between;gap:32px;font-size:12px;font-weight:700}
+.net span:last-child{color:${netPayable < 0 ? "#dc2626" : "#059669"}}
+.footer{margin-top:20px;border-top:1px solid #e5e7eb;padding-top:8px;font-size:9px;color:#bbb;text-align:center}
+/* column widths */
+col.c0{width:36px} col.c1{width:90px} col.c2{width:110px} col.c3{width:80px}
+col.c4{width:80px} col.c5{width:80px} col.c6{width:85px} col.c7{width:80px}
+col.c8{width:120px} col.c9{width:auto}
+</style></head><body>
+<div class="hdr">
+  <div>
+    <div class="co">Ornate Solar</div>
+    <div class="doc">Expense Report</div>
+    <div class="gen">Generated: ${today}</div>
+  </div>
+  <div class="emp">
+    <div class="emp-name">${group.userName}</div>
+    ${group.userDepartment ? `<div class="emp-dept">${group.userDepartment}</div>` : ""}
+    <div class="emp-period">Period: ${periodLabel}</div>
+    <div class="emp-period">${expRows.length} expense${expRows.length !== 1 ? "s" : ""}</div>
+  </div>
+</div>
+<table>
+  <colgroup>
+    <col class="c0"><col class="c1"><col class="c2"><col class="c3">
+    <col class="c4"><col class="c5"><col class="c6"><col class="c7">
+    <col class="c8"><col class="c9">
+  </colgroup>
+  <thead><tr>
+    <th>#</th><th>Date</th><th>Type</th><th>Mode</th>
+    <th class="r">Amount</th><th class="r">Advance</th><th class="r">Subtotal</th>
+    <th>Status</th><th>Site</th><th>Remarks</th>
+  </tr></thead>
+  <tbody>${rowsHtml}</tbody>
+  <tfoot><tr>
+    <td colspan="4" style="text-align:right">Total</td>
+    <td style="text-align:right">${fmtINR(group.total)}</td>
+    <td style="text-align:right">${group.advance > 0 ? fmtINR(group.advance) : "—"}</td>
+    <td style="text-align:right;color:${netPayable < 0 ? "#dc2626" : "#059669"}">${netPayable < 0 ? "-₹" + Math.abs(netPayable).toLocaleString("en-IN") : fmtINR(netPayable)}</td>
+    <td colspan="3"></td>
+  </tr></tfoot>
+</table>
+<div class="summary">
+  <div class="sbox">
+    <div class="sr"><span>Total Expenses</span><span>${fmtINR(group.total)}</span></div>
+    <div class="sr"><span>Advance Taken</span><span>${group.advance > 0 ? fmtINR(group.advance) : "—"}</span></div>
+    <div class="divider"></div>
+    <div class="net"><span>Net Payable</span><span>${netPayable < 0 ? "-₹" + Math.abs(netPayable).toLocaleString("en-IN") : fmtINR(netPayable)}</span></div>
+  </div>
+</div>
+<div class="footer">Ornate Solar &nbsp;·&nbsp; Daily Report Portal &nbsp;·&nbsp; System-generated document</div>
+</body></html>`;
+
+  // Render HTML offscreen, capture with html2canvas, embed in jsPDF
+  const container = document.createElement("div");
+  container.style.cssText = "position:fixed;left:-9999px;top:0;z-index:-1;";
+  container.innerHTML = html;
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "width:1400px;height:10px;border:none;";
+  container.appendChild(iframe);
+  document.body.appendChild(container);
+
+  await new Promise((resolve) => {
+    iframe.onload = resolve;
+    iframe.srcdoc = html;
+  });
+
+  // Let the iframe fully paint
+  await new Promise((r) => setTimeout(r, 300));
+
+  const iframeDoc = iframe.contentDocument;
+  const iframeBody = iframeDoc.body;
+  const fullH = iframeBody.scrollHeight;
+  iframe.style.height = fullH + "px";
+
+  await new Promise((r) => setTimeout(r, 100));
+
+  const canvas = await html2canvas(iframeBody, {
+    scale: 2,
+    useCORS: true,
+    backgroundColor: "#ffffff",
+    width: 1400,
+    height: fullH,
+    windowWidth: 1400,
+    windowHeight: fullH,
+  });
+
+  document.body.removeChild(container);
+
+  // A4 landscape: 297 × 210 mm  →  at 96dpi: 1122 × 794px
+  // canvas is 2800px wide (1400 × scale:2); map to 297mm width
+  const PDF_W = 297;
+  const PDF_H = 210;
+  const pxPerMm = canvas.width / PDF_W;           // how many canvas px per mm
+  const pageHeightPx = PDF_H * pxPerMm;           // canvas px that fit on one A4 page
+
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  let srcY = 0;
+  let pageNum = 0;
+  while (srcY < canvas.height) {
+    if (pageNum > 0) doc.addPage();
+    const sliceH = Math.min(pageHeightPx, canvas.height - srcY);
+    const sliceCanvas = document.createElement("canvas");
+    sliceCanvas.width = canvas.width;
+    sliceCanvas.height = sliceH;
+    sliceCanvas.getContext("2d").drawImage(canvas, 0, srcY, canvas.width, sliceH, 0, 0, canvas.width, sliceH);
+    const imgData = sliceCanvas.toDataURL("image/jpeg", 0.95);
+    const sliceMmH = sliceH / pxPerMm;
+    doc.addImage(imgData, "JPEG", 0, 0, PDF_W, sliceMmH);
+    srcY += sliceH;
+    pageNum++;
+  }
+
+  const safeName = group.userName.replace(/[^a-z0-9]/gi, "_");
+  doc.save(`Expense_${safeName}_${periodLabel.replace(/\s+/g, "_")}.pdf`);
+}
+
 function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, onBatchMarkPaid, markPaidPending }) {
   const baseGroups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
   // 3-click sort cycle: unclicked → asc → desc → null (reset).  When
@@ -1633,6 +1829,17 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 </Table.Td>
               )}
               <Table.Td className="text-right">
+                <div className="flex items-center justify-end gap-1.5">
+                {/* Always available, whichever action branch renders below.
+                    Stops propagation so it doesn't also open the row modal. */}
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); downloadEmployeePDF(g, monthFilter); }}
+                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
+                  title="Download expense report as PDF"
+                >
+                  ⬇ PDF
+                </button>
                 {isFinanceApprover ? (
                   // Finance approver (Shivangi) sees a single batch Paid
                   // action that fires for every approved expense in this
@@ -1692,6 +1899,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 ) : (
                   <span className="text-[11px] text-zinc-400">No pending</span>
                 )}
+                </div>
               </Table.Td>
             </Table.Row>
           ))
@@ -1760,7 +1968,10 @@ function StatusMix({ pending, approved, rejected, onHold }) {
   );
 }
 
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold }) {
+// `onDecide` omitted => the approve / reject / hold controls (and the row
+// checkboxes that drive them) disappear entirely.  Finance gets `onMarkPaid`
+// instead: they disburse, they don't decide.
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -1843,7 +2054,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                 {typeBreakdown.map((t, i) => (
                   <span key={t.label}>
                     {i > 0 && <span className="mx-1.5 text-zinc-400">·</span>}
-                    <span className="capitalize">{t.label}</span>{" "}
+                    <span className="font-semibold capitalize text-zinc-900">{t.label}</span>{" "}
                     <span className="tabular-nums">
                       ₹{t.amount.toLocaleString("en-IN")}
                     </span>
@@ -1906,6 +2117,8 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                   const pending   = realRows.filter(r => r.status === "pending").length;
 
                   const pendingExpenses = realRows.filter(r => r.status === "pending");
+                  // Finance's disbursal queue for this day — approved but not paid.
+                  const approvedExpenses = realRows.filter(r => r.status === "approved");
 
                   return [
                     // ── Date group header row — one set of action buttons per day ──
@@ -1980,6 +2193,20 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                 </div>
                               );
                             })()}
+                            {/* Finance's only action — no approve / reject / hold. */}
+                            {onMarkPaid && approvedExpenses.length > 0 && (
+                              <div className="flex items-center gap-1 border-l border-orange-200 pl-2.5">
+                                <button
+                                  type="button"
+                                  disabled={markPaidPending}
+                                  onClick={() => onMarkPaid(approvedExpenses.map(r => r.id))}
+                                  className="rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                                  title={`Mark ${approvedExpenses.length} approved expense(s) from this day as paid`}
+                                >
+                                  Paid ({approvedExpenses.length})
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
                         {/* Inline remarks — appears as soon as HR checks
@@ -3225,11 +3452,24 @@ function AddAdvanceModal({ employees, onClose, onSave, saving }) {
   const [amount, setAmount]         = useState("");
   const [date, setDate]             = useState(todayISO());
   const [note, setNote]             = useState("");
+  const [approvedBy, setApprovedBy] = useState("");
+  const [paidDate, setPaidDate]     = useState("");
+  const [paidAmount, setPaidAmount] = useState("");
 
   function handleSubmit(e) {
     e.preventDefault();
     if (!employeeId || !amount || Number(amount) <= 0) return;
-    onSave({ employee_id: Number(employeeId), amount: Number(amount), date, note });
+    onSave({
+      employee_id: Number(employeeId),
+      amount: Number(amount),
+      date,
+      note,
+      approved_by: approvedBy,
+      paid_date: paidDate,
+      // Blank paid amount + a paid date means the full advance went out —
+      // the server fills it in.
+      paid_amount: paidAmount === "" ? null : Number(paidAmount),
+    });
   }
 
   const inputCls = "w-full rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500";
@@ -3285,7 +3525,55 @@ function AddAdvanceModal({ employees, onClose, onSave, saving }) {
             </div>
           </div>
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Note (optional)</label>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Approved by (optional)</label>
+            <input
+              type="text"
+              value={approvedBy}
+              onChange={(e) => setApprovedBy(e.target.value)}
+              placeholder="e.g. Tarini Aggrawal"
+              className={inputCls}
+              maxLength={120}
+            />
+          </div>
+
+          {/* Payment details — filling the paid date records the advance as
+              already disbursed instead of leaving it in the pending queue. */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid date (optional)</label>
+              <input
+                type="date"
+                value={paidDate}
+                max={todayISO()}
+                onChange={(e) => {
+                  setPaidDate(e.target.value);
+                  if (!e.target.value) setPaidAmount("");
+                }}
+                className={inputCls}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid amount (₹)</label>
+              <input
+                type="number"
+                min={0}
+                value={paidAmount}
+                onChange={(e) => setPaidAmount(e.target.value)}
+                placeholder={paidDate ? String(amount || 0) : "—"}
+                disabled={!paidDate}
+                className={`${inputCls} disabled:bg-zinc-50 disabled:text-zinc-400`}
+              />
+            </div>
+          </div>
+          {paidDate && (
+            <p className="-mt-2 text-[10px] text-zinc-500">
+              Marks this advance as paid. Leave the amount blank to record the full ₹
+              {Number(amount || 0).toLocaleString("en-IN")}.
+            </p>
+          )}
+
+          <div>
+            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Remarks (optional)</label>
             <input
               type="text"
               value={note}
@@ -3526,13 +3814,13 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                   onOpen={(expense) => setPreview(expense)}
                 />
               </Table.Td>
-              <Table.Td className="max-w-65 truncate text-zinc-600" title={r.remarks}>
+              <Table.Td className="max-w-[320px] whitespace-pre-wrap break-words text-zinc-600">
                 {r.remarks || "—"}
               </Table.Td>
               {/* Decision Note — the note HR / Tarini attached with their
                   decision.  Colour matches the row's status so employees
                   can spot the reason on rejected / held rows quickly. */}
-              <Table.Td className="max-w-[180px] truncate" title={r.decision_note}>
+              <Table.Td className="max-w-[240px] whitespace-pre-wrap break-words">
                 {r.decision_note ? (
                   <span className={
                     r.status === "rejected"
@@ -3553,19 +3841,21 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                     Open →
                   </span>
                 ) : (
-                  // Edit + Delete only while the expense is still in
-                  // pending / on-hold state.  After approval/rejection the
-                  // row is locked — show a muted "Locked" label instead.
-                  (r.status === "pending" || r.status === "onhold") ? (
+                  // Edit while the expense is pending / on hold, and on
+                  // rejected rows so the employee can fix and resubmit
+                  // (saving sends it back to pending).  Delete stays limited
+                  // to pending / on hold.  Approved / paid rows are locked.
+                  (r.status === "pending" || r.status === "onhold" || r.status === "rejected") ? (
                     <div className="flex items-center justify-end gap-1.5">
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); onEdit(r); }}
                         className="rounded-md border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-100"
+                        title={r.status === "rejected" ? "Fix and resubmit — this sends the expense back for approval" : undefined}
                       >
-                        Edit
+                        {r.status === "rejected" ? "Edit & resubmit" : "Edit"}
                       </button>
-                      {onDelete && (
+                      {onDelete && r.status !== "rejected" && (
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onDelete(r); }}
@@ -3579,7 +3869,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                   ) : (
                     <span
                       className="inline-flex items-center gap-1 rounded-md bg-zinc-100 px-2 py-1 text-[10px] font-medium text-zinc-500"
-                      title="Approved / rejected expenses can't be edited or deleted"
+                      title="Approved expenses can't be edited or deleted"
                     >
                       Locked
                     </span>

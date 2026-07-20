@@ -8,7 +8,7 @@ import { useExpenses, useMe } from "@/lib/queries";
 // the summary respects the same visibility rules.  HR + Tarini + Smita
 // see the whole company; regular employees see only their own row.
 const APPROVER_LOCAL_PREFIXES = ["tarini", "smita"];
-const FINANCE_LOCAL_PREFIXES  = ["shivangi"];
+const FINANCE_LOCAL_PREFIXES  = ["shivangi", "saif"];
 function _localMatches(email, prefixes) {
   const local = (email || "").trim().toLowerCase().split("@")[0] || "";
   return prefixes.some((p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_"));
@@ -108,8 +108,26 @@ export default function ExpenseSummaryPage() {
     };
   }, [scopedExpenses, year]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Apply search + re-derive footer totals from the visible subset so the
-  // Total row reflects only what's currently on screen.
+  // 3-click sort cycle: unclicked → asc → desc → null (back to the default
+  // department-grouped order).  Month columns sort on "m0".."m11".
+  const [sortKey, setSortKey] = useState(null);
+  const [sortDir, setSortDir] = useState(null);
+  function toggleSort(key) {
+    if (sortKey !== key) { setSortKey(key); setSortDir("asc"); return; }
+    if (sortDir === "asc")  { setSortDir("desc"); return; }
+    if (sortDir === "desc") { setSortKey(null); setSortDir(null); return; }
+    setSortDir("asc");
+  }
+  const sortValue = (r, key) => {
+    if (key === "name")  return (r.name || "").toLowerCase();
+    if (key === "dept")  return (r.dept || "").toLowerCase();
+    if (key === "total") return r.total || 0;
+    if (key?.startsWith("m")) return r.months[Number(key.slice(1))]?.total || 0;
+    return 0;
+  };
+
+  // Apply search + sort, then re-derive footer totals from the visible subset
+  // so the Total row reflects only what's currently on screen.
   const {
     visibleRows,
     visibleMonthTotals,
@@ -118,11 +136,19 @@ export default function ExpenseSummaryPage() {
     visibleGrandPaid,
   } = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const filtered = q
+    let filtered = q
       ? rows.filter((r) =>
           (r.name || "").toLowerCase().includes(q) ||
           (r.dept || "").toLowerCase().includes(q))
       : rows;
+    if (sortKey && sortDir) {
+      filtered = filtered.slice().sort((a, b) => {
+        const va = sortValue(a, sortKey);
+        const vb = sortValue(b, sortKey);
+        if (va === vb) return 0;
+        return (va > vb ? 1 : -1) * (sortDir === "asc" ? 1 : -1);
+      });
+    }
     const mt = Array(12).fill(0);
     const mp = Array(12).fill(0);
     let gt = 0;
@@ -139,29 +165,51 @@ export default function ExpenseSummaryPage() {
       visibleGrandTotal: gt,
       visibleGrandPaid: gp,
     };
-  }, [rows, search]);
+  }, [rows, search, sortKey, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Department separators only make sense in the default department-grouped
+  // order — once a sort is applied the rows are no longer clustered by dept.
   const isFirstOfDept = useMemo(() => {
     const flags = new Array(visibleRows.length).fill(false);
+    if (sortKey) return flags;
     let prev = null;
     for (let i = 0; i < visibleRows.length; i++) {
       if (visibleRows[i].dept !== prev) { flags[i] = true; prev = visibleRows[i].dept; }
     }
     return flags;
-  }, [visibleRows]);
+  }, [visibleRows, sortKey]);
+
+  // Sortable header label — mirrors the 3-click control on the expense table.
+  const SortLabel = ({ col, children, align = "left" }) => {
+    const active = sortKey === col;
+    const arrow = !active ? "↕" : sortDir === "asc" ? "↑" : "↓";
+    return (
+      <button
+        type="button"
+        onClick={() => toggleSort(col)}
+        title="Click to sort — 3rd click resets"
+        className={`inline-flex items-center gap-1 select-none uppercase tracking-wider ${align === "right" ? "flex-row-reverse" : ""} ${active ? "text-orange-700" : "text-inherit"} hover:text-orange-700`}
+      >
+        {children}
+        <span className={`text-[9px] ${active ? "opacity-100" : "opacity-40"}`}>{arrow}</span>
+      </button>
+    );
+  };
 
   function handleDownload() {
-    const header = ["Employee", "Department", ...MONTHS_SHORT, "Total"];
-    const dataRows = visibleRows.map((r) => [
+    // Mirrors the table, sort and all — visibleRows is already ordered.
+    const header = ["#", "Employee", "Department", ...MONTHS_SHORT, "Total"];
+    const dataRows = visibleRows.map((r, i) => [
+      i + 1,
       r.name,
       r.dept || "",
       ...r.months.map((m) => m.total || 0),
       r.total || 0,
     ]);
-    const footer = ["Total", "", ...visibleMonthTotals.map((v) => v || 0), visibleGrandTotal || 0];
+    const footer = ["", "Total", "", ...visibleMonthTotals.map((v) => v || 0), visibleGrandTotal || 0];
     const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows, footer]);
     ws["!cols"] = [
-      { wch: 24 }, { wch: 22 },
+      { wch: 5 }, { wch: 24 }, { wch: 22 },
       ...MONTHS_SHORT.map(() => ({ wch: 11 })),
       { wch: 14 },
     ];
@@ -251,12 +299,21 @@ export default function ExpenseSummaryPage() {
             <table className="min-w-full text-[11px] border-collapse">
               <thead>
                 <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600 bg-zinc-100">
-                  <th className="sticky top-0 left-0 z-40 bg-zinc-100 px-2 py-2 text-left border-b border-zinc-200">Employee</th>
-                  <th className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-left border-b border-zinc-200">Department</th>
-                  {MONTHS_SHORT.map((m) => (
-                    <th key={m} className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-right whitespace-nowrap border-b border-zinc-200">{m}</th>
+                  <th className="sticky top-0 left-0 z-40 w-10 bg-zinc-100 px-2 py-2 text-right border-b border-zinc-200">#</th>
+                  <th className="sticky top-0 left-10 z-40 bg-zinc-100 px-2 py-2 text-left border-b border-zinc-200">
+                    <SortLabel col="name">Employee</SortLabel>
+                  </th>
+                  <th className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-left border-b border-zinc-200">
+                    <SortLabel col="dept">Department</SortLabel>
+                  </th>
+                  {MONTHS_SHORT.map((m, mi) => (
+                    <th key={m} className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-right whitespace-nowrap border-b border-zinc-200">
+                      <SortLabel col={`m${mi}`} align="right">{m}</SortLabel>
+                    </th>
                   ))}
-                  <th className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-right whitespace-nowrap border-b border-zinc-200">Total</th>
+                  <th className="sticky top-0 z-30 bg-zinc-100 px-2 py-2 text-right whitespace-nowrap border-b border-zinc-200">
+                    <SortLabel col="total" align="right">Total</SortLabel>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-100">
@@ -265,7 +322,10 @@ export default function ExpenseSummaryPage() {
                     key={r.userId}
                     className={`hover:bg-zinc-50/60 ${isFirstOfDept[i] && i > 0 ? "border-t-2 border-t-orange-100" : ""}`}
                   >
-                    <td className="sticky left-0 z-10 bg-white px-2 py-2 font-medium text-zinc-900 whitespace-nowrap">
+                    <td className="sticky left-0 z-10 w-10 bg-white px-2 py-2 text-right tabular-nums text-zinc-400">
+                      {i + 1}
+                    </td>
+                    <td className="sticky left-10 z-10 bg-white px-2 py-2 font-medium text-zinc-900 whitespace-nowrap">
                       {r.name}
                     </td>
                     <td className="px-2 py-2 text-zinc-600 whitespace-nowrap">{r.dept || "—"}</td>
@@ -289,7 +349,8 @@ export default function ExpenseSummaryPage() {
               </tbody>
               <tfoot className="font-semibold">
                 <tr className="bg-orange-50">
-                  <td className="sticky bottom-0 left-0 z-30 bg-orange-50 px-2 py-2 whitespace-nowrap border-t border-orange-100">Total</td>
+                  <td className="sticky bottom-0 left-0 z-30 w-10 bg-orange-50 px-2 py-2 border-t border-orange-100" />
+                  <td className="sticky bottom-0 left-10 z-30 bg-orange-50 px-2 py-2 whitespace-nowrap border-t border-orange-100">Total</td>
                   <td className="sticky bottom-0 z-20 bg-orange-50 px-2 py-2 border-t border-orange-100" />
                   {visibleMonthTotals.map((v, i) => {
                     const cls = statusColor(v, visibleMonthPaid[i]);

@@ -551,9 +551,16 @@ export function useMarkPaidExpense() {
 export function useIssueAdvance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ employee_id, amount, date, note }) =>
-      api.post("/api/expenses/advance-issue", { employee_id, amount, date: date || null, note: note || null })
-        .then((r) => r.data),
+    mutationFn: ({ employee_id, amount, date, note, approved_by, paid_date, paid_amount }) =>
+      api.post("/api/expenses/advance-issue", {
+        employee_id,
+        amount,
+        date: date || null,
+        note: note || null,
+        approved_by: approved_by || null,
+        paid_date: paid_date || null,
+        paid_amount: paid_amount === "" || paid_amount == null ? null : paid_amount,
+      }).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qkExpenses });
       toast.success("Advance recorded");

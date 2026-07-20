@@ -698,6 +698,16 @@ export default function AdvanceApprovalPage() {
     );
   })();
 
+  // Finance (Shivangi, Saif) see every request read-only — they disburse the
+  // money but don't decide.  The server applies the same rule to the list.
+  const isFinanceViewer = (() => {
+    if (!me) return false;
+    const local = (me.email || "").toLowerCase().split("@")[0];
+    return ["shivangi", "saif"].some(
+      (p) => local === p || local.startsWith(p + ".") || local.startsWith(p + "_")
+    );
+  })();
+
   const monthOptions = useMemo(() => {
     const seen = new Set();
     const now = new Date();
@@ -781,7 +791,11 @@ export default function AdvanceApprovalPage() {
           <div className="leading-tight">
             <h1 className="text-base font-semibold tracking-tight text-zinc-900">Advance Approval</h1>
             <p className="text-[11px] text-zinc-600">
-              {isApprover ? "Review and decide travel advance requests." : "Apply for travel advance — sent to HR for approval."}
+              {isApprover
+                ? "Review and decide travel advance requests."
+                : isFinanceViewer
+                  ? "All travel advance requests across the company."
+                  : "Apply for travel advance — sent to HR for approval."}
             </p>
           </div>
           <div className="text-right tabular-nums">
