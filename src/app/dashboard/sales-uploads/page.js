@@ -18,7 +18,7 @@ export default function SalesUploadsPage() {
     return local === "tarini" || local.startsWith("tarini.") || local.startsWith("tarini_");
   })();
   const canUpload =
-    !isTarini && (isHR || ["insideSales", "salesService"].includes(me?.department?.slug));
+    !isTarini && (isHR || ["insideSales", "salesService", "sales"].includes(me?.department?.slug));
 
   const { data: uploads = [], isLoading } = useSalesUploads();
   const upload = useUploadSalesSheet();
@@ -76,6 +76,18 @@ export default function SalesUploadsPage() {
   const [monthFilter, setMonthFilter] = useState("all");
   const [empFilter, setEmpFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
+  const [deptFilter, setDeptFilter] = useState("all");
+
+  // Sales, Inside Sales, and Sales Service all share this page now — without
+  // a department toggle their uploads render as one mixed list, which is
+  // exactly what made it hard to find "just my team's" sheets.
+  const deptOptions = useMemo(() => {
+    const seen = new Map();
+    for (const u of sorted) {
+      if (u.user_department_slug) seen.set(u.user_department_slug, u.user_department_name || u.user_department_slug);
+    }
+    return Array.from(seen, ([slug, name]) => ({ slug, name }));
+  }, [sorted]);
 
   const monthOptions = useMemo(() => {
     const seen = new Set();
@@ -93,25 +105,29 @@ export default function SalesUploadsPage() {
 
   const empOptions = useMemo(() => {
     const seen = new Set();
-    for (const u of sorted) { if (u.user_name) seen.add(u.user_name); }
+    for (const u of sorted) {
+      if (deptFilter !== "all" && u.user_department_slug !== deptFilter) continue;
+      if (u.user_name) seen.add(u.user_name);
+    }
     return Array.from(seen).sort();
-  }, [sorted]);
+  }, [sorted, deptFilter]);
 
   const filtered = useMemo(() => {
     return sorted.filter((u) => {
+      if (deptFilter !== "all" && u.user_department_slug !== deptFilter) return false;
       if (monthFilter !== "all" && (u.period_start || "").slice(0, 7) !== monthFilter) return false;
       if (empFilter !== "all" && u.user_name !== empFilter) return false;
       if (typeFilter !== "all" && u.period_type !== typeFilter) return false;
       return true;
     });
-  }, [sorted, monthFilter, empFilter, typeFilter]);
+  }, [sorted, deptFilter, monthFilter, empFilter, typeFilter]);
 
   if (!me) return null;
 
   if (!canUpload && !isHR) {
     return (
       <div className="rounded-md border border-zinc-200 bg-white p-4 text-xs text-zinc-600">
-        This page is for Inside Sales employees and HR only.
+        This page is for Sales, Inside Sales, Sales Service employees and HR only.
       </div>
     );
   }
@@ -123,7 +139,7 @@ export default function SalesUploadsPage() {
         <div className="relative flex flex-wrap items-center gap-3">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-sky-700 ring-1 ring-sky-200">
             <span className="h-1.5 w-1.5 rounded-full bg-sky-500" />
-            Inside Sales
+            Sales
           </span>
           <div className="leading-tight">
             <h1 className="text-base font-semibold tracking-tight text-zinc-900">Sales Calling Sheets</h1>
@@ -212,6 +228,39 @@ export default function SalesUploadsPage() {
       )}
 
       <div className="rounded-lg border border-zinc-200 bg-white">
+        {/* Department toggle — Sales / Inside Sales / Sales Service all upload
+            to this same page now, so without this their sheets render as one
+            mixed list. Only shown when HR/Tarini are looking at more than one
+            department's worth of uploads. */}
+        {(isHR || isTarini) && deptOptions.length > 1 && (
+          <div className="flex flex-wrap items-center gap-1.5 border-b border-zinc-100 px-4 py-2.5">
+            <button
+              type="button"
+              onClick={() => { setDeptFilter("all"); setEmpFilter("all"); }}
+              className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                deptFilter === "all"
+                  ? "bg-sky-600 text-white"
+                  : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+              }`}
+            >
+              All departments
+            </button>
+            {deptOptions.map((d) => (
+              <button
+                key={d.slug}
+                type="button"
+                onClick={() => { setDeptFilter(d.slug); setEmpFilter("all"); }}
+                className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                  deptFilter === d.slug
+                    ? "bg-sky-600 text-white"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                }`}
+              >
+                {d.name}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-2 border-b border-zinc-100 px-4 py-2.5">
           <h2 className="text-sm font-semibold text-zinc-900">
             {isHR || isTarini ? "All uploads" : "My uploads"}{" "}
@@ -253,7 +302,9 @@ export default function SalesUploadsPage() {
                 ))}
               </select>
             )}
-            {/* Clear button — shown only when any filter is active */}
+            {/* Clear button — shown only when any filter is active. Deliberately
+                leaves the department toggle alone — that's a separate "which
+                team am I looking at" choice, not a stackable filter. */}
             {(monthFilter !== "all" || typeFilter !== "all" || empFilter !== "all") && (
               <button
                 type="button"

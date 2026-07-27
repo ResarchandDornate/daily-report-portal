@@ -71,9 +71,9 @@ export default function DashboardLayout({ children }) {
       "/dashboard/expense/summary",
       "/dashboard/advance-approval",
     ];
-    // Inside Sales and Sales Service employees get one extra page for their
-    // calling / customer-service sheets.
-    if (["insideSales", "salesService"].includes(me.department?.slug)) {
+    // Inside Sales, Sales Service, and Sales employees get one extra page for
+    // their calling / customer-service sheets.
+    if (["insideSales", "salesService", "sales"].includes(me.department?.slug)) {
       employeePaths.push("/dashboard/sales-uploads");
     }
     // Tarini / Smita (named approvers) can also visit the employee-roster
@@ -107,9 +107,10 @@ export default function DashboardLayout({ children }) {
     );
   }
 
-  // "Sales Sheets" is for Inside Sales employees + HR only.  We can't gate
-  // it purely by role (since it's also for an employee role), so we apply
-  // the dept check below when filtering the visible nav.
+  // "Sales Sheets" is for Sales / Inside Sales / Sales Service employees +
+  // HR only.  We can't gate it purely by role (since it's also for an
+  // employee role), so we apply the dept check below when filtering the
+  // visible nav.
   const NAV = [
     { href: "/dashboard", label: "Overview", icon: "home", roles: ["hr", "employee"] },
     { href: "/dashboard/my-report", label: "My Daily Report", icon: "doc", roles: ["hr", "employee"] },
@@ -128,7 +129,7 @@ export default function DashboardLayout({ children }) {
       label: "Sales Sheets",
       icon: "upload",
       roles: ["hr", "employee"],
-      requiresDept: ["insideSales", "salesService"],
+      requiresDept: ["insideSales", "salesService", "sales"],
     },
     // Team head sidebar entry — only employees flagged with is_team_head see
     // this.  HR uses the existing department / All Employees views instead,

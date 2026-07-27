@@ -555,7 +555,7 @@ export default function ExpensePage() {
           expenses), so the "My Expenses" tab is hidden for her — she
           stays in the company-wide view permanently.  Regular employees
           never see this toggle either. */}
-      {isAdmin && !isTariniReviewer && !isCoordinator && (
+      {isAdmin && !isTariniReviewer && (
         <div className="flex items-center gap-1 rounded-md border border-zinc-200 bg-white p-1 w-fit">
           <button
             type="button"
@@ -794,7 +794,7 @@ export default function ExpensePage() {
             {/* Action buttons — outside the bar, right side.
                 Finance (Shivangi, Saif) file their own expenses like anyone
                 else; Tarini (reviewer) and coordinators (read-only) don't. */}
-            {!isTariniReviewer && !isCoordinator && (
+            {!isTariniReviewer && (
               <>
                 <button
                   type="button"
@@ -883,6 +883,8 @@ export default function ExpensePage() {
           group={empModal}
           monthFilter={monthFilter}
           onClose={() => setEmpModal(null)}
+          // Excel export is offered only to project coordinators (Arman).
+          onDownloadExcel={isCoordinator ? (g) => downloadEmployeeExcel(g, monthFilter) : undefined}
           // Finance approvers disburse but never decide, and coordinators are
           // fully read-only — withholding onDecide strips the approve / reject /
           // hold controls from the modal.
@@ -1516,6 +1518,38 @@ function groupExpensesByUser(expenses) {
   });
 }
 
+// One employee's expenses -> an .xlsx file, filtered to the same month the
+// modal is showing.  Used by the coordinator's per-employee "Download Excel".
+function downloadEmployeeExcel(group, monthFilter) {
+  const rows = (group.expenses || [])
+    .filter((e) => !monthFilter || monthFilter === "all" || (e.date && e.date.startsWith(monthFilter)))
+    .slice()
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  const allTravel = [...TRAVEL_TYPES.filter((t) => t.value !== "other"), ...TRAVEL_SUBTYPES];
+  const typeLabel = (e) => EXPENSE_TYPES.find((t) => t.value === e.expense_type)?.label || e.expense_type || "";
+  const travelLabel = (e) => allTravel.find((t) => t.value === e.travel_type)?.label || e.travel_type || "";
+  const modeLabel = (e) => MODES.find((m) => m.value === e.mode)?.label || e.mode || "";
+  const STATUS = { pending: "Pending", approved: "Approved", rejected: "Rejected", onhold: "On Hold", paid: "Paid" };
+
+  const header = ["Date", "Type", "Travel", "Mode", "Site", "Amount (₹)", "Advance (₹)", "Subtotal (₹)", "Status", "Remarks"];
+  const dataRows = rows.map((e) => {
+    const amt = e.amount || 0, adv = e.advance || 0;
+    return [e.date || "", typeLabel(e), travelLabel(e), modeLabel(e), e.site_name || "",
+      amt, adv, amt - adv, STATUS[e.status] || e.status || "", e.remarks || ""];
+  });
+  const totalAmt = rows.reduce((s, e) => s + (e.amount || 0), 0);
+  const totalAdv = rows.reduce((s, e) => s + (e.advance || 0), 0);
+  dataRows.push(["TOTAL", "", "", "", "", totalAmt, totalAdv, totalAmt - totalAdv, "", ""]);
+
+  const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows]);
+  ws["!cols"] = [12, 14, 12, 10, 20, 12, 12, 12, 10, 30].map((w) => ({ wch: w }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Expenses");
+  const safe = (group.userName || "employee").replace(/[^a-z0-9]/gi, "_");
+  const period = !monthFilter || monthFilter === "all" ? "all" : monthFilter;
+  XLSX.writeFile(wb, `Expenses_${safe}_${period}.xlsx`);
+}
+
 // Render the employee's expenses to an offscreen iframe, snapshot it with
 // html2canvas and slice the bitmap across A4 pages.  Going through the
 // browser's own renderer is what keeps the rupee sign intact — jsPDF's core
@@ -1829,12 +1863,11 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 {(() => { const n = (g.total || 0) - (g.advance || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN"); })()}
               </Table.Td>
               <Table.Td>
-                <GroupStatusPill
+                <StatusMix
                   pending={g.pendingCount}
                   onHold={g.onHoldCount}
                   rejected={g.rejectedCount}
                   approved={g.approvedCount}
-                  paid={g.paidCount}
                 />
               </Table.Td>
               <Table.Td>
@@ -1953,22 +1986,6 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   );
 }
 
-function GroupStatusPill({ pending, onHold, rejected, approved, paid }) {
-  // Show a single status label for an employee's expense group, picking
-  // the MOST URGENT state across all their expenses.  Priority:
-  //   Pending  >  On Hold  >  Rejected  >  Approved  >  Paid
-  // (Pending is most urgent because HR has to act on it; Paid is shown
-  // last because it's terminal and only appears when nothing else does.)
-  let status;
-  if (pending > 0)       status = "pending";
-  else if (onHold > 0)   status = "onhold";
-  else if (rejected > 0) status = "rejected";
-  else if (approved > 0) status = "approved";
-  else if (paid > 0)     status = "paid";
-  else return <span className="text-zinc-400">—</span>;
-  return <StatusPill status={status} />;
-}
-
 function StatusMix({ pending, approved, rejected, onHold }) {
   const items = [
     { count: pending,  cls: "bg-amber-50 text-amber-800 ring-amber-200",       label: "Pending"  },
@@ -1996,7 +2013,7 @@ function StatusMix({ pending, approved, rejected, onHold }) {
 // `onDecide` omitted => the approve / reject / hold controls (and the row
 // checkboxes that drive them) disappear entirely.  Finance gets `onMarkPaid`
 // instead: they disburse, they don't decide.
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -2056,7 +2073,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
       onClick={onClose}
     >
       <div
-        className="w-full max-w-6xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
+        className="w-full max-w-[92vw] 2xl:max-w-7xl overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-lift"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-zinc-100 bg-orange-50 px-5 py-4">
@@ -2088,17 +2105,90 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
               </p>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1.5 text-zinc-500 hover:bg-white hover:text-zinc-800"
-            aria-label="Close"
-          >
-            ✕
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Coordinator-only: export this employee's expenses to Excel. */}
+            {onDownloadExcel && (
+              <button
+                type="button"
+                onClick={() => onDownloadExcel(group)}
+                className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                title="Download this employee's expenses as an Excel file"
+              >
+                ⬇ Excel
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md p-1.5 text-zinc-500 hover:bg-white hover:text-zinc-800"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="max-h-[82vh] overflow-y-auto p-5">
+          {/* Payable breakdown — makes it unambiguous once some rows are
+              rejected: Total − Rejected − Advance = Net Payable. Also splits
+              out Approved vs Pending amounts so it's clear at a glance how
+              much of the remaining (non-rejected) total is actually decided
+              vs still awaiting a decision. Placed above the table, top-right,
+              so it's visible without scrolling down past a long expense list. */}
+          {(() => {
+            const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
+            const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
+            const amtByStatus = (statuses) => group.expenses
+              .filter((r) => statuses.includes(r.status))
+              .reduce((s, r) => s + (r.amount || 0), 0);
+            const rejectedAmt = amtByStatus(["rejected"]);
+            // "Approved" here covers both approved and already-paid rows —
+            // both are past the decision point, just at different disbursal stages.
+            const approvedAmt = amtByStatus(["approved", "paid"]);
+            const pendingAmt = amtByStatus(["pending", "onhold"]);
+            const netPayable = totalAmt - rejectedAmt - totalAdv;
+            const inr = (n) => `₹${Math.abs(n).toLocaleString("en-IN")}`;
+            return (
+              <div className="mb-4 flex justify-end">
+                <div className="sticky top-0 z-10 w-full max-w-xs rounded-lg border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm shadow-sm">
+                  <div className="flex justify-between py-0.5 text-zinc-600">
+                    <span>Total expense</span>
+                    <span className="tabular-nums font-medium text-zinc-900">{inr(totalAmt)}</span>
+                  </div>
+                  {approvedAmt > 0 && (
+                    <div className="flex justify-between py-0.5 text-zinc-600">
+                      <span>Approved</span>
+                      <span className="tabular-nums font-medium text-emerald-700">{inr(approvedAmt)}</span>
+                    </div>
+                  )}
+                  {pendingAmt > 0 && (
+                    <div className="flex justify-between py-0.5 text-zinc-600">
+                      <span>Pending / On hold</span>
+                      <span className="tabular-nums font-medium text-amber-600">{inr(pendingAmt)}</span>
+                    </div>
+                  )}
+                  {rejectedAmt > 0 && (
+                    <div className="flex justify-between py-0.5 text-zinc-600">
+                      <span>Rejected</span>
+                      <span className="tabular-nums font-medium text-rose-600">−{inr(rejectedAmt)}</span>
+                    </div>
+                  )}
+                  {totalAdv > 0 && (
+                    <div className="flex justify-between py-0.5 text-zinc-600">
+                      <span>Advance paid</span>
+                      <span className="tabular-nums font-medium text-zinc-900">−{inr(totalAdv)}</span>
+                    </div>
+                  )}
+                  <div className="mt-1 flex justify-between border-t border-zinc-200 pt-1.5 font-semibold">
+                    <span>Net payable (after reject)</span>
+                    <span className={`tabular-nums ${netPayable < 0 ? "text-rose-600" : "text-emerald-700"}`}>
+                      {netPayable < 0 ? "−" : ""}{inr(netPayable)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
           <Table maxHeight={640}>
             <Table.Head>
               <Table.Row>
@@ -2361,7 +2451,13 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
             {(() => {
               const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
               const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
-              const totalNet = totalAmt - totalAdv;
+              // Rejected expenses are NOT reimbursed, so they must come out of the
+              // payable.  Subtotal column keeps showing per-row amount; the footer
+              // Net is the true payable = (non-rejected amount) − advance.
+              const rejectedAmt = group.expenses
+                .filter((r) => r.status === "rejected")
+                .reduce((s, r) => s + (r.amount || 0), 0);
+              const totalNet = totalAmt - rejectedAmt - totalAdv;
               return (
                 <Table.Foot>
                   <Table.Row className="font-semibold">
