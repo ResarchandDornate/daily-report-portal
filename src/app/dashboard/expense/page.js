@@ -1486,6 +1486,8 @@ function groupExpensesByUser(expenses) {
         expenses: [],
         total: 0,
         advance: 0,
+        approvedAmt: 0,
+        pendingAmt: 0,
         pendingCount: 0,
         approvedCount: 0,
         rejectedCount: 0,
@@ -1501,11 +1503,14 @@ function groupExpensesByUser(expenses) {
     g.expenses.push(e);
     g.total += (e.amount || 0);
     g.advance += (e.advance || 0);
-    if (e.status === "pending") g.pendingCount += 1;
-    else if (e.status === "approved") g.approvedCount += 1;
+    // "Approved" amount covers both approved and already-paid rows — both
+    // are past the decision point, just at different disbursal stages.
+    // "Pending" covers pending and on-hold — still awaiting a decision.
+    if (e.status === "pending") { g.pendingCount += 1; g.pendingAmt += (e.amount || 0); }
+    else if (e.status === "approved") { g.approvedCount += 1; g.approvedAmt += (e.amount || 0); }
     else if (e.status === "rejected") g.rejectedCount += 1;
-    else if (e.status === "onhold") g.onHoldCount += 1;
-    else if (e.status === "paid") g.paidCount += 1;
+    else if (e.status === "onhold") { g.onHoldCount += 1; g.pendingAmt += (e.amount || 0); }
+    else if (e.status === "paid") { g.paidCount += 1; g.approvedAmt += (e.amount || 0); }
     if ((e.bills || []).length > 0) g.withBillsCount += 1;
     if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
     if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
@@ -1752,13 +1757,15 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
     const keyed = baseGroups.map((g) => {
       const subtotal = (g.total || 0) - (g.advance || 0);
       const values = {
-        date:    g.latestExpenseDate || "",
-        name:    (g.userName || "").toLowerCase(),
-        total:   g.total || 0,
-        advance: g.advance || 0,
+        date:     g.latestExpenseDate || "",
+        name:     (g.userName || "").toLowerCase(),
+        total:    g.total || 0,
+        advance:  g.advance || 0,
+        approved: g.approvedAmt || 0,
+        pending:  g.pendingAmt || 0,
         subtotal,
-        bills:   g.withBillsCount || 0,
-        submit:  g.latestSubmitAt || "",
+        bills:    g.withBillsCount || 0,
+        submit:   g.latestSubmitAt || "",
       };
       return { g, v: values[sortKey] };
     });
@@ -1776,11 +1783,15 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   const visibleTotals = useMemo(() => {
     let amount = 0;
     let advance = 0;
+    let approved = 0;
+    let pending = 0;
     for (const g of groups) {
       amount += g.total || 0;
       advance += g.advance || 0;
+      approved += g.approvedAmt || 0;
+      pending += g.pendingAmt || 0;
     }
-    return { amount, advance, subtotal: amount - advance };
+    return { amount, advance, approved, pending, subtotal: amount - advance };
   }, [groups]);
 
   // Sortable header cell — shows a small ↑/↓ indicator on the active
@@ -1823,6 +1834,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
           <SortTh col="name">Employee</SortTh>
           <SortTh col="total">Total Amount</SortTh>
           <SortTh col="advance">Advance</SortTh>
+          <SortTh col="approved" align="right">Approved</SortTh>
+          <SortTh col="pending" align="right">Pending</SortTh>
           <SortTh col="subtotal">Subtotal</SortTh>
           <Table.Th>Status</Table.Th>
           <SortTh col="bills">Bills</SortTh>
@@ -1833,9 +1846,9 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="Loading expenses…" />
+          <Table.Empty colSpan={isFinanceApprover ? 12 : 11} message="Loading expenses…" />
         ) : groups.length === 0 ? (
-          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="No expenses to review yet." />
+          <Table.Empty colSpan={isFinanceApprover ? 12 : 11} message="No expenses to review yet." />
         ) : (
           groups.map((g) => (
             <Table.Row
@@ -1858,6 +1871,12 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
               </Table.Td>
               <Table.Td className="tabular-nums text-zinc-700">
                 {g.advance > 0 ? `₹${g.advance.toLocaleString("en-IN")}` : "—"}
+              </Table.Td>
+              <Table.Td className="text-right tabular-nums font-medium text-emerald-700">
+                {g.approvedAmt > 0 ? `₹${g.approvedAmt.toLocaleString("en-IN")}` : "—"}
+              </Table.Td>
+              <Table.Td className="text-right tabular-nums font-medium text-amber-600">
+                {g.pendingAmt > 0 ? `₹${g.pendingAmt.toLocaleString("en-IN")}` : "—"}
               </Table.Td>
               <Table.Td className={`tabular-nums font-semibold ${(g.total || 0) - (g.advance || 0) < 0 ? "text-rose-600" : "text-emerald-700"}`}>
                 {(() => { const n = (g.total || 0) - (g.advance || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN"); })()}
@@ -1974,6 +1993,12 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
             </Table.Td>
             <Table.Td className="tabular-nums text-zinc-700">
               {visibleTotals.advance > 0 ? `₹${visibleTotals.advance.toLocaleString("en-IN")}` : "—"}
+            </Table.Td>
+            <Table.Td className="text-right tabular-nums text-emerald-700">
+              {visibleTotals.approved > 0 ? `₹${visibleTotals.approved.toLocaleString("en-IN")}` : "—"}
+            </Table.Td>
+            <Table.Td className="text-right tabular-nums text-amber-600">
+              {visibleTotals.pending > 0 ? `₹${visibleTotals.pending.toLocaleString("en-IN")}` : "—"}
             </Table.Td>
             <Table.Td className={`tabular-nums font-semibold ${visibleTotals.subtotal < 0 ? "text-rose-600" : "text-emerald-700"}`}>
               {(visibleTotals.subtotal < 0 ? "-₹" : "₹") + Math.abs(visibleTotals.subtotal).toLocaleString("en-IN")}
