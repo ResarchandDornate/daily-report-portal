@@ -97,11 +97,11 @@ export function useOrganisations() {
   });
 }
 
-export function useEmployees(filters = {}) {
+export function useEmployees(filters = {}, { enabled = true } = {}) {
   return useQuery({
     queryKey: qk.employees(filters),
     queryFn: () => api.get("/api/employees", { params: filters }).then((r) => r.data),
-    enabled: auth.isLoggedIn(),
+    enabled: auth.isLoggedIn() && enabled,
   });
 }
 
@@ -328,13 +328,14 @@ export function useSalesUploads() {
 export function useUploadSalesSheet() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ file, period_type, period_start, period_end, note }) => {
+    mutationFn: ({ file, period_type, period_start, period_end, note, on_behalf_of }) => {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("period_type", period_type || "weekly");
       if (period_start) fd.append("period_start", period_start);
       if (period_end) fd.append("period_end", period_end);
       if (note) fd.append("note", note);
+      if (on_behalf_of) fd.append("on_behalf_of", String(on_behalf_of));
       return api
         .post("/api/sales-uploads", fd, {
           headers: { "Content-Type": "multipart/form-data" },

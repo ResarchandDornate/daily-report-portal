@@ -65,7 +65,7 @@ function Row({ children, className = "", ...props }) {
 }
 
 function Th({ children, className = "", ...props }) {
-  return <th className={`px-3 py-2.5 ${className}`} {...props}>{children}</th>;
+  return <th className={`whitespace-nowrap px-3 py-2.5 ${className}`} {...props}>{children}</th>;
 }
 
 function Td({ children, className = "", ...props }) {

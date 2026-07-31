@@ -76,6 +76,11 @@ export default function DashboardLayout({ children }) {
     if (["insideSales", "salesService", "sales"].includes(me.department?.slug)) {
       employeePaths.push("/dashboard/sales-uploads");
     }
+    // Team heads (e.g. Justina) manage a Sales team — they can upload calling
+    // sheets on behalf of their members even if their own dept isn't Sales.
+    if (me.is_team_head) {
+      employeePaths.push("/dashboard/sales-uploads");
+    }
     // Tarini / Smita (named approvers) can also visit the employee-roster
     // pages so they can deactivate someone after reviewing them.
     if (isNamedApprover) {
@@ -176,7 +181,11 @@ export default function DashboardLayout({ children }) {
     // HR always sees dept-gated items; non-HR only when their dept matches.
     if (n.requiresDept && me.role !== "hr") {
       const allowed = Array.isArray(n.requiresDept) ? n.requiresDept : [n.requiresDept];
-      return allowed.includes(me.department?.slug);
+      if (allowed.includes(me.department?.slug)) return true;
+      // Team heads managing a Sales team see the Sales Sheets link too, so they
+      // can upload calling Excel on behalf of their members.
+      if (n.href === "/dashboard/sales-uploads" && me.is_team_head) return true;
+      return false;
     }
     // Team-head-gated items: hide unless me.is_team_head is true.
     if (n.requiresTeamHead && !me.is_team_head) return false;
