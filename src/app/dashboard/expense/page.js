@@ -255,7 +255,8 @@ export default function ExpensePage() {
   // Pass 1: accumulate ALL expenses per user (amount + latest date).
   // Pass 2: accumulate only the advance fields.
   // This ensures totalAmount = the employee's full expense total, and
-  // net = totalAmount - totalAdvance matches what the modal shows.
+  // net = Total − Rejected − Paid − Advance matches the modal's "Payable
+  // breakdown" card (same formula, kept in sync everywhere).
   const advanceSummary = useMemo(() => {
     if (!isAdmin) return [];
     const byUser = new Map();
@@ -267,6 +268,8 @@ export default function ExpensePage() {
           department: e.user_department || "",
           totalAdvance: 0,
           totalAmount: 0,
+          rejectedAmt: 0,
+          paidAmt: 0,
           pendingAdv: 0,
           approvedAdv: 0,
           advExpCount: 0,
@@ -276,6 +279,15 @@ export default function ExpensePage() {
       const g = byUser.get(e.user_id);
       // Always sum full expense amount and track latest date.
       g.totalAmount += (e.amount || 0);
+      if (e.status === "rejected") g.rejectedAmt += (e.amount || 0);
+      // Net each paid row against its OWN advance (if any) before adding to
+      // paidAmt. Some employees record advance directly on the same row as
+      // the real expense claim (not a separate zero-amount placeholder) —
+      // for those, the full `amount` was never new cash disbursed once
+      // that row is paid, only amount-advance was. Without this netting,
+      // that advance gets subtracted a second time by the global "Advance"
+      // deduction below, producing a wrong (often deeply negative) net.
+      else if (e.status === "paid") g.paidAmt += Math.max(0, (e.amount || 0) - (e.advance || 0));
       if ((e.date || "") > g.latestDate) g.latestDate = e.date;
       // Only count advance where it's actually set.
       const adv = e.advance || 0;
@@ -291,6 +303,39 @@ export default function ExpensePage() {
       .filter((g) => g.totalAdvance > 0)
       .sort((a, b) => b.totalAdvance - a.totalAdvance);
   }, [rawExpenses, isAdmin]);
+
+  // Per-employee "Paid this month" / "Remaining this month" — payment runs
+  // happen twice a month (roughly two ~15-day batches), so a single "Total
+  // Amount" column doesn't show how much of THIS month has actually been
+  // disbursed vs is still outstanding. Scoped to `monthFilter` only (not
+  // the admin table's status/search/dept filters) so every row for the same
+  // employee shows the same whole-month figures regardless of which status
+  // is currently being viewed. Reuses the exact Paid/Net-Payable formulas
+  // already established for the per-employee modal, so these columns always
+  // agree with what that modal shows.
+  const employeeMonthlySummary = useMemo(() => {
+    if (!isAdmin) return new Map();
+    const inMonth = (e) =>
+      !monthFilter || monthFilter === "all" || (e.date && e.date.startsWith(monthFilter));
+    const byUser = new Map();
+    for (const e of rawExpenses) {
+      if (!inMonth(e)) continue;
+      if (!byUser.has(e.user_id)) {
+        byUser.set(e.user_id, { total: 0, rejectedAmt: 0, paidAmt: 0, advance: 0 });
+      }
+      const g = byUser.get(e.user_id);
+      g.total += (e.amount || 0);
+      g.advance += (e.advance || 0);
+      if (e.status === "rejected") g.rejectedAmt += (e.amount || 0);
+      else if (e.status === "paid") g.paidAmt += Math.max(0, (e.amount || 0) - (e.advance || 0));
+    }
+    const out = new Map();
+    for (const [userId, g] of byUser) {
+      const remaining = g.total - g.rejectedAmt - g.paidAmt - g.advance;
+      out.set(userId, { paidAmt: g.paidAmt, remainingAmt: remaining });
+    }
+    return out;
+  }, [rawExpenses, isAdmin, monthFilter]);
 
   // Current month's HR remark for the LOGGED-IN user — shown as a banner
   // on the employee's My Expenses view so they know if payment is on hold
@@ -440,6 +485,31 @@ export default function ExpensePage() {
         : expenses;
     return source.reduce((sum, e) => sum + (e.advance || 0), 0);
   }, [rawExpenses, isAdmin, viewMode, me, expenses]);
+  // Rejected + already-paid amounts, same `source` logic as totalAmount/
+  // totalAdvance above — needed so the header's "Net Payable" uses the same
+  // Total − Rejected − Paid − Advance formula as the per-employee modal,
+  // instead of the old Total − Advance shortcut that overstated what's
+  // still owed once anything was rejected or already disbursed.
+  const totalRejected = useMemo(() => {
+    const source = !isAdmin
+      ? rawExpenses
+      : viewMode === "mine"
+        ? rawExpenses.filter((e) => me && e.user_id === me.id)
+        : expenses;
+    return source.filter((e) => e.status === "rejected").reduce((sum, e) => sum + (e.amount || 0), 0);
+  }, [rawExpenses, isAdmin, viewMode, me, expenses]);
+  const totalPaid = useMemo(() => {
+    const source = !isAdmin
+      ? rawExpenses
+      : viewMode === "mine"
+        ? rawExpenses.filter((e) => me && e.user_id === me.id)
+        : expenses;
+    // Net each paid row against its own advance — see the matching comment
+    // in advanceSummary above for why (a paid row that itself carries an
+    // advance would otherwise get that advance subtracted twice).
+    return source.filter((e) => e.status === "paid").reduce((sum, e) => sum + Math.max(0, (e.amount || 0) - (e.advance || 0)), 0);
+  }, [rawExpenses, isAdmin, viewMode, me, expenses]);
+  const netPayableHeader = totalAmount - totalRejected - totalPaid - totalAdvance;
 
   function downloadMonthlyExcel() {
     const header = ["Date", "Expense Type", "Travel Type", "Mode", "Site Name", "Amount (₹)", "Advance (₹)", "Net (₹)", "Remarks"];
@@ -497,8 +567,8 @@ export default function ExpensePage() {
                 <div className="h-8 w-px bg-orange-200" />
                 <div className="text-right">
                   <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Net Payable</div>
-                  <div className={`text-sm font-bold ${(totalAmount - totalAdvance) < 0 ? "text-rose-600" : "text-zinc-900"}`}>
-                    {(totalAmount - totalAdvance) < 0 ? "-" : ""}₹{Math.abs(totalAmount - totalAdvance).toLocaleString("en-IN")}
+                  <div className={`text-sm font-bold ${netPayableHeader < 0 ? "text-rose-600" : "text-zinc-900"}`}>
+                    {netPayableHeader < 0 ? "-" : ""}₹{Math.abs(netPayableHeader).toLocaleString("en-IN")}
                   </div>
                 </div>
               </>
@@ -692,6 +762,7 @@ export default function ExpensePage() {
           decidePending={decideExpense.isPending}
           hideOnHold={isTariniReviewer}
           monthFilter={monthFilter}
+          employeeMonthlySummary={employeeMonthlySummary}
           isFinanceApprover={isFinanceApprover}
           isCoordinator={isCoordinator}
           markPaidPending={markPaid.isPending}
@@ -900,6 +971,11 @@ export default function ExpensePage() {
           onUpdateType={isCoordinator ? undefined : async (id, expense_type) => {
             try {
               await updateExpense.mutateAsync({ id, expense_type });
+            } catch {}
+          }}
+          onUpdateRemarks={isCoordinator ? undefined : async (id, remarks) => {
+            try {
+              await updateExpense.mutateAsync({ id, remarks });
             } catch {}
           }}
           decidePending={decideExpense.isPending}
@@ -1474,49 +1550,50 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
 
 // ---- Admin (Tarini / Smita / HR) — grouped per-employee table ----
 
-// Groups by (employee, status) — NOT just employee — so a single row never
-// mixes pending/approved/paid amounts together.  An employee with expenses
-// in three different statuses shows up as three separate rows, one per
-// status.  This keeps every column (Total, Advance, Subtotal) an unambiguous
-// single-status figure instead of a combined total that has to be decoded
-// via a multi-badge pill.
-const STATUS_ROW_PRIORITY = { pending: 0, onhold: 1, approved: 2, paid: 3, rejected: 4 };
-
+// One row per employee, combining every status — the multi-status pill
+// (StatusMix) and the dedicated Paid (Month) / Remaining (Month) columns
+// already show the paid-vs-owed breakdown, so splitting into separate rows
+// per status was more confusing than helpful; reverted per explicit request.
 function groupExpensesByUser(expenses) {
-  const byKey = new Map();
+  const byUser = new Map();
   for (const e of expenses) {
-    const status = e.status || "pending";
-    const key = `${e.user_id}::${status}`;
-    if (!byKey.has(key)) {
-      byKey.set(key, {
+    const key = e.user_id;
+    if (!byUser.has(key)) {
+      byUser.set(key, {
         userId: e.user_id,
         userName: e.user_name || "—",
         userDepartment: e.user_department || "",
-        status,
         expenses: [],
         total: 0,
         advance: 0,
+        pendingCount: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        onHoldCount: 0,
+        paidCount: 0,
         withBillsCount: 0,
         latestExpenseDate: e.date,
         latestSubmitAt: e.created_at,
         latestPaidAt: null,
       });
     }
-    const g = byKey.get(key);
+    const g = byUser.get(key);
     g.expenses.push(e);
     g.total += (e.amount || 0);
     g.advance += (e.advance || 0);
+    if (e.status === "pending") g.pendingCount += 1;
+    else if (e.status === "approved") g.approvedCount += 1;
+    else if (e.status === "rejected") g.rejectedCount += 1;
+    else if (e.status === "onhold") g.onHoldCount += 1;
+    else if (e.status === "paid") g.paidCount += 1;
     if ((e.bills || []).length > 0) g.withBillsCount += 1;
     if (e.date > g.latestExpenseDate) g.latestExpenseDate = e.date;
     if ((e.created_at || "") > (g.latestSubmitAt || "")) g.latestSubmitAt = e.created_at;
     if (e.paid_at && (!g.latestPaidAt || e.paid_at > g.latestPaidAt)) g.latestPaidAt = e.paid_at;
   }
-  // Sort: status urgency first (Pending > On Hold > Approved > Paid >
-  // Rejected), then by employee name within each status.
-  return Array.from(byKey.values()).sort((a, b) => {
-    const pa = STATUS_ROW_PRIORITY[a.status] ?? 9;
-    const pb = STATUS_ROW_PRIORITY[b.status] ?? 9;
-    if (pa !== pb) return pa - pb;
+  // Sort: pending count desc (most-urgent first), then by name.
+  return Array.from(byUser.values()).sort((a, b) => {
+    if (b.pendingCount !== a.pendingCount) return b.pendingCount - a.pendingCount;
     return a.userName.localeCompare(b.userName);
   });
 }
@@ -1581,7 +1658,15 @@ async function downloadEmployeePDF(group, monthFilter) {
     return new Date(Number(y), Number(m) - 1, 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
   })();
   const today = new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-  const netPayable = group.total - group.advance;
+  // Same Total − Rejected − Paid − Advance formula as the modal's "Payable
+  // breakdown" card, so the downloaded PDF's Net Payable always matches
+  // what's shown on screen for the same employee.
+  const rejectedAmt = group.expenses.filter((e) => e.status === "rejected").reduce((s, e) => s + (e.amount || 0), 0);
+  // Net each paid row against its own advance — a paid row that itself
+  // carries an advance would otherwise have that advance subtracted twice
+  // (once here, once via group.advance below).
+  const paidAmt = group.expenses.filter((e) => e.status === "paid").reduce((s, e) => s + Math.max(0, (e.amount || 0) - (e.advance || 0)), 0);
+  const netPayable = group.total - rejectedAmt - paidAmt - group.advance;
 
   const rowsHtml = expRows.map((e, i) => {
     const sub = (e.amount || 0) - (e.advance || 0);
@@ -1737,7 +1822,7 @@ col.c8{width:120px} col.c9{width:auto}
   doc.save(`Expense_${safeName}_${periodLabel.replace(/\s+/g, "_")}.pdf`);
 }
 
-function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, isCoordinator, onBatchMarkPaid, markPaidPending }) {
+function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee, onBatchDecide, hideOnHold, monthFilter, isFinanceApprover, isCoordinator, onBatchMarkPaid, markPaidPending, employeeMonthlySummary }) {
   const baseGroups = useMemo(() => groupExpensesByUser(expenses), [expenses]);
   // 3-click sort cycle: unclicked → asc → desc → null (reset).  When
   // sortKey is null we fall back to the default order returned by
@@ -1781,14 +1866,24 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
   const visibleTotals = useMemo(() => {
     let amount = 0;
     let advance = 0;
+    let paidMonth = 0;
+    let remainingMonth = 0;
     const employeeIds = new Set();
     for (const g of groups) {
       amount += g.total || 0;
       advance += g.advance || 0;
+      // employeeMonthlySummary is keyed by userId (already deduped), so only
+      // add each employee's month totals once even though a row-per-status
+      // design can list the same employee across several rows.
+      if (!employeeIds.has(g.userId)) {
+        const monthly = employeeMonthlySummary?.get(g.userId);
+        paidMonth += monthly?.paidAmt || 0;
+        remainingMonth += monthly?.remainingAmt || 0;
+      }
       employeeIds.add(g.userId);
     }
-    return { amount, advance, subtotal: amount - advance, employeeCount: employeeIds.size };
-  }, [groups]);
+    return { amount, advance, subtotal: amount - advance, employeeCount: employeeIds.size, paidMonth, remainingMonth };
+  }, [groups, employeeMonthlySummary]);
 
   // Sortable header cell — shows a small ↑/↓ indicator on the active
   // column and dims non-active columns' arrows to hint they're clickable.
@@ -1831,6 +1926,8 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
           <SortTh col="total">Total Amount</SortTh>
           <SortTh col="advance">Advance</SortTh>
           <SortTh col="subtotal">Subtotal</SortTh>
+          <Table.Th className="text-right" title="Paid so far this month — payment runs happen ~twice a month">Paid (Month)</Table.Th>
+          <Table.Th className="text-right" title="Still owed this month, net of advance and what's already paid">Remaining (Month)</Table.Th>
           <Table.Th>Status</Table.Th>
           <SortTh col="bills">Bills</SortTh>
           <SortTh col="submit">Submit Date</SortTh>
@@ -1840,13 +1937,13 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
       </Table.Head>
       <Table.Body>
         {isLoading ? (
-          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="Loading expenses…" />
+          <Table.Empty colSpan={isFinanceApprover ? 12 : 11} message="Loading expenses…" />
         ) : groups.length === 0 ? (
-          <Table.Empty colSpan={isFinanceApprover ? 10 : 9} message="No expenses to review yet." />
+          <Table.Empty colSpan={isFinanceApprover ? 12 : 11} message="No expenses to review yet." />
         ) : (
           groups.map((g) => (
             <Table.Row
-              key={`${g.userId}-${g.status}`}
+              key={g.userId}
               onClick={() => onOpenEmployee(g)}
               className="cursor-pointer hover:bg-zinc-50"
             >
@@ -1869,8 +1966,29 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
               <Table.Td className={`tabular-nums font-semibold ${(g.total || 0) - (g.advance || 0) < 0 ? "text-rose-600" : "text-emerald-700"}`}>
                 {(() => { const n = (g.total || 0) - (g.advance || 0); return (n < 0 ? "-₹" : "₹") + Math.abs(n).toLocaleString("en-IN"); })()}
               </Table.Td>
+              {(() => {
+                const monthly = employeeMonthlySummary?.get(g.userId);
+                const paidAmt = monthly?.paidAmt || 0;
+                const remainingAmt = monthly?.remainingAmt ?? 0;
+                return (
+                  <>
+                    <Table.Td className="text-right tabular-nums font-medium text-sky-700">
+                      {paidAmt > 0 ? `₹${paidAmt.toLocaleString("en-IN")}` : "—"}
+                    </Table.Td>
+                    <Table.Td className={`text-right tabular-nums font-medium ${remainingAmt < 0 ? "text-rose-600" : "text-amber-700"}`}>
+                      {remainingAmt < 0 ? "−" : ""}{remainingAmt !== 0 ? `₹${Math.abs(remainingAmt).toLocaleString("en-IN")}` : "—"}
+                    </Table.Td>
+                  </>
+                );
+              })()}
               <Table.Td>
-                <StatusRowBadge status={g.status} count={g.expenses.length} />
+                <StatusMix
+                  pending={g.pendingCount}
+                  onHold={g.onHoldCount}
+                  rejected={g.rejectedCount}
+                  approved={g.approvedCount}
+                  paid={g.paidCount}
+                />
               </Table.Td>
               <Table.Td>
                 <BillCountIndicator withBills={g.withBillsCount} total={g.expenses.length} />
@@ -1899,13 +2017,12 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 >
                   ⬇ PDF
                 </button>
-                {/* Coordinators are read-only: PDF + Open only, no decisions.
-                    Each row is now a single status for this employee, so the
-                    action shown just depends on which status this row is. */}
+                {/* Coordinators are read-only: PDF + Open only, no decisions. */}
                 {isCoordinator ? null : isFinanceApprover ? (
-                  // Finance approver (Shivangi / Saif) sees a batch Paid
-                  // action on "approved" rows only.  No approve / reject.
-                  g.status === "approved" ? (
+                  // Finance approver (Shivangi / Saif) sees a single batch Paid
+                  // action that fires for every approved expense in this
+                  // employee's group.  No approve / reject controls.
+                  g.approvedCount > 0 ? (
                     <div
                       className="flex items-center justify-end gap-1.5"
                       onClick={(e) => e.stopPropagation()}
@@ -1915,17 +2032,17 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                         disabled={markPaidPending}
                         onClick={() => onBatchMarkPaid(g)}
                         className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
-                        title={`Mark ${g.expenses.length} approved expense(s) as paid`}
+                        title={`Mark ${g.approvedCount} approved expense(s) as paid`}
                       >
-                        Paid ({g.expenses.length})
+                        Paid ({g.approvedCount})
                       </button>
                     </div>
-                  ) : g.status === "paid" ? (
-                    <span className="text-[11px] text-zinc-400">Already paid</span>
                   ) : (
-                    <span className="text-[11px] text-zinc-400">—</span>
+                    <span className="text-[11px] text-zinc-400">
+                      {g.expenses.some((e) => e.status === "paid") ? "All paid" : "Nothing approved"}
+                    </span>
                   )
-                ) : g.status === "pending" ? (
+                ) : g.pendingCount > 0 ? (
                   <div
                     className="flex items-center justify-end gap-1.5"
                     onClick={(e) => e.stopPropagation()}
@@ -1958,7 +2075,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                     </button>
                   </div>
                 ) : (
-                  <span className="text-[11px] text-zinc-400">—</span>
+                  <span className="text-[11px] text-zinc-400">No pending</span>
                 )}
                 </div>
               </Table.Td>
@@ -1970,8 +2087,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
         <Table.Foot>
           <Table.Row className="font-semibold">
             <Table.Td className="whitespace-nowrap text-zinc-900" colSpan={2}>
-              Total for {monthLabel} · {visibleTotals.employeeCount} employee{visibleTotals.employeeCount === 1 ? "" : "s"}
-              {" "}· {groups.length} row{groups.length === 1 ? "" : "s"}
+              Total for {monthLabel} · {groups.length} employee{groups.length === 1 ? "" : "s"}
             </Table.Td>
             <Table.Td className="tabular-nums text-zinc-900">
               ₹{visibleTotals.amount.toLocaleString("en-IN")}
@@ -1982,35 +2098,17 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
             <Table.Td className={`tabular-nums font-semibold ${visibleTotals.subtotal < 0 ? "text-rose-600" : "text-emerald-700"}`}>
               {(visibleTotals.subtotal < 0 ? "-₹" : "₹") + Math.abs(visibleTotals.subtotal).toLocaleString("en-IN")}
             </Table.Td>
+            <Table.Td className="text-right tabular-nums text-sky-700">
+              {visibleTotals.paidMonth > 0 ? `₹${visibleTotals.paidMonth.toLocaleString("en-IN")}` : "—"}
+            </Table.Td>
+            <Table.Td className={`text-right tabular-nums ${visibleTotals.remainingMonth < 0 ? "text-rose-600" : "text-amber-700"}`}>
+              {visibleTotals.remainingMonth < 0 ? "−" : ""}{visibleTotals.remainingMonth !== 0 ? `₹${Math.abs(visibleTotals.remainingMonth).toLocaleString("en-IN")}` : "—"}
+            </Table.Td>
             <Table.Td colSpan={4} />
           </Table.Row>
         </Table.Foot>
       )}
     </Table>
-  );
-}
-
-// Single-status badge for the admin table, where each row is now one
-// (employee, status) bucket rather than a mix.  Same color language as
-// StatusMix below, just one badge instead of a filtered list of several.
-const STATUS_BADGE_META = {
-  pending:  { cls: "bg-amber-50 text-amber-800 ring-amber-200",       label: "Pending"  },
-  onhold:   { cls: "bg-sky-50 text-sky-700 ring-sky-200",             label: "On Hold"  },
-  approved: { cls: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: "Approved" },
-  paid:     { cls: "bg-violet-50 text-violet-700 ring-violet-200",    label: "Paid"     },
-  rejected: { cls: "bg-rose-50 text-rose-700 ring-rose-200",          label: "Rejected" },
-};
-
-function StatusRowBadge({ status, count }) {
-  const meta = STATUS_BADGE_META[status] || { cls: "bg-zinc-100 text-zinc-600 ring-zinc-200", label: status || "—" };
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${meta.cls}`}
-      title={`${meta.label}: ${count}`}
-    >
-      {meta.label}
-      <span className="tabular-nums font-semibold">{count}</span>
-    </span>
   );
 }
 
@@ -2039,10 +2137,51 @@ function StatusMix({ pending, approved, rejected, onHold, paid }) {
   );
 }
 
+// Click-to-edit remarks — mirrors the expense-type <select> right next to
+// it: only available while HR/Tarini can still edit the row at all (pending,
+// same gate `onUpdateType` already uses), saves on blur/Enter, Escape reverts.
+function RemarksCell({ row, onSave, disabled }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(row.remarks || "");
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setValue(row.remarks || ""); setEditing(true); }}
+        className="block max-w-[320px] truncate whitespace-pre-wrap rounded px-1 py-0.5 text-left text-zinc-700 hover:bg-orange-50 hover:text-orange-700"
+        title={row.remarks ? `${row.remarks} (click to edit)` : "Click to add a remark"}
+      >
+        {row.remarks || <span className="text-zinc-300">—</span>}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={value}
+      disabled={disabled}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => {
+        setEditing(false);
+        const trimmed = value.trim();
+        if (trimmed !== (row.remarks || "")) onSave(row.id, trimmed);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") { setValue(row.remarks || ""); setEditing(false); }
+      }}
+      className="w-full max-w-[320px] rounded border border-orange-300 bg-white px-1.5 py-0.5 text-[11px] text-zinc-800 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500/20"
+    />
+  );
+}
+
 // `onDecide` omitted => the approve / reject / hold controls (and the row
 // checkboxes that drive them) disappear entirely.  Finance gets `onMarkPaid`
 // instead: they disburse, they don't decide.
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, onUpdateRemarks, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -2159,11 +2298,15 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
 
         <div className="max-h-[82vh] overflow-y-auto p-5">
           {/* Payable breakdown — makes it unambiguous once some rows are
-              rejected: Total − Rejected − Advance = Net Payable. Also splits
-              out Approved vs Pending amounts so it's clear at a glance how
-              much of the remaining (non-rejected) total is actually decided
-              vs still awaiting a decision. Placed above the table, top-right,
-              so it's visible without scrolling down past a long expense list. */}
+              rejected or already paid: Total − Rejected − Paid − Advance =
+              Net Payable. Also splits out Approved vs Pending amounts so
+              it's clear at a glance how much of the remaining total is
+              actually decided vs still awaiting a decision. Placed above
+              the table, top-right, so it's visible without scrolling down
+              past a long expense list. This is the canonical "still owed"
+              formula — every other Net Payable figure in this file (page
+              header, PDF export, table footer below, Monthly Summary modal,
+              Advances panel) mirrors it so they never disagree. */}
           {(() => {
             const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
             const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
@@ -2171,9 +2314,16 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
               .filter((r) => statuses.includes(r.status))
               .reduce((s, r) => s + (r.amount || 0), 0);
             const rejectedAmt = amtByStatus(["rejected"]);
-            const approvedAmt = amtByStatus(["approved"]);   // approved, awaiting payment
-            const paidAmt = amtByStatus(["paid"]);           // already disbursed
-            const pendingAmt = amtByStatus(["pending", "onhold"]);
+            // Net each paid row against its OWN advance (if any) — some
+            // employees record advance directly on the same row as the real
+            // claim rather than a separate zero-amount placeholder. Without
+            // this, that advance gets subtracted twice: once implicitly (the
+            // full raw amount counted as "already paid") and again via the
+            // "Advance paid" line below, which can drive Net Payable deeply
+            // and wrongly negative for those employees.
+            const paidAmt = group.expenses
+              .filter((r) => r.status === "paid")
+              .reduce((s, r) => s + Math.max(0, (r.amount || 0) - (r.advance || 0)), 0);
             // Still owed = non-rejected total minus what's already paid out and
             // minus advances given. Updates live as rows are paid / approved.
             const netPayable = totalAmt - rejectedAmt - paidAmt - totalAdv;
@@ -2185,22 +2335,10 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                     <span>Total expense</span>
                     <span className="tabular-nums font-medium text-zinc-900">{inr(totalAmt)}</span>
                   </div>
-                  {approvedAmt > 0 && (
-                    <div className="flex justify-between py-0.5 text-zinc-600">
-                      <span>Approved (unpaid)</span>
-                      <span className="tabular-nums font-medium text-emerald-700">{inr(approvedAmt)}</span>
-                    </div>
-                  )}
                   {paidAmt > 0 && (
                     <div className="flex justify-between py-0.5 text-zinc-600">
                       <span>Paid</span>
                       <span className="tabular-nums font-medium text-sky-700">−{inr(paidAmt)}</span>
-                    </div>
-                  )}
-                  {pendingAmt > 0 && (
-                    <div className="flex justify-between py-0.5 text-zinc-600">
-                      <span>Pending / On hold</span>
-                      <span className="tabular-nums font-medium text-amber-600">{inr(pendingAmt)}</span>
                     </div>
                   )}
                   {rejectedAmt > 0 && (
@@ -2454,8 +2592,12 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                               />
                             )}
                           </Table.Td>
-                          <Table.Td className="max-w-[320px] whitespace-pre-wrap text-zinc-700" title={r.remarks}>
-                            {r.remarks || "—"}
+                          <Table.Td className="max-w-[320px] text-zinc-700">
+                            {onUpdateRemarks && !isAdvanceRow && r.status === "pending" ? (
+                              <RemarksCell row={r} onSave={onUpdateRemarks} disabled={updatingType} />
+                            ) : (
+                              <span className="whitespace-pre-wrap" title={r.remarks}>{r.remarks || "—"}</span>
+                            )}
                           </Table.Td>
                           {/* Decision Note — the note HR / Tarini attached
                               when they approved, held, or rejected the row.
@@ -2487,13 +2629,21 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
             {(() => {
               const totalAmt = group.expenses.reduce((s, r) => s + (r.amount || 0), 0);
               const totalAdv = group.expenses.reduce((s, r) => s + (r.advance || 0), 0);
-              // Rejected expenses are NOT reimbursed, so they must come out of the
-              // payable.  Subtotal column keeps showing per-row amount; the footer
-              // Net is the true payable = (non-rejected amount) − advance.
+              // Rejected expenses are NOT reimbursed, and already-paid amounts
+              // are no longer owed — both must come out of the payable. Same
+              // formula as the "Payable breakdown" card above (Total − Rejected
+              // − Paid − Advance) — kept in sync so this footer and that card
+              // never show two different "what's still owed" numbers for the
+              // same employee.
               const rejectedAmt = group.expenses
                 .filter((r) => r.status === "rejected")
                 .reduce((s, r) => s + (r.amount || 0), 0);
-              const totalNet = totalAmt - rejectedAmt - totalAdv;
+              // Net each paid row against its own advance — see the same note
+              // on the breakdown card above.
+              const paidAmt = group.expenses
+                .filter((r) => r.status === "paid")
+                .reduce((s, r) => s + Math.max(0, (r.amount || 0) - (r.advance || 0)), 0);
+              const totalNet = totalAmt - rejectedAmt - paidAmt - totalAdv;
               return (
                 <Table.Foot>
                   <Table.Row className="font-semibold">
@@ -2719,6 +2869,8 @@ function MonthlySummaryModal({ allExpenses, monthFilter, onClose }) {
           department: e.user_department || "",
           total: 0,
           advance: 0,
+          rejectedAmt: 0,
+          paidAmt: 0,
           pending: 0,
           approved: 0,
           rejected: 0,
@@ -2732,22 +2884,27 @@ function MonthlySummaryModal({ allExpenses, monthFilter, onClose }) {
       g.advance += (e.advance || 0);
       if (e.status === "pending")  g.pending  += 1;
       if (e.status === "approved") g.approved += 1;
-      if (e.status === "rejected") g.rejected += 1;
+      if (e.status === "rejected") { g.rejected += 1; g.rejectedAmt += (e.amount || 0); }
       if (e.status === "onhold")   g.onhold   += 1;
-      if (e.status === "paid")     g.paid     += 1;
+      // Net each paid row against its own advance — see the matching note
+      // in the per-employee modal's breakdown card.
+      if (e.status === "paid")     { g.paid    += 1; g.paidAmt += Math.max(0, (e.amount || 0) - (e.advance || 0)); }
       const ts = e.created_at || e.date;
       if (ts > (g.latestSubmit || "")) g.latestSubmit = ts;
     }
     return Array.from(byUser.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [allExpenses, monthStart, monthEnd]);
 
-  // Footer totals.
+  // Footer totals.  Same Total − Rejected − Paid − Advance "still owed"
+  // formula used everywhere else this session (the per-employee modal's
+  // breakdown card, its table footer, the PDF export, and the page header) —
+  // kept in sync so no two views of the same numbers ever disagree.
   const totals = useMemo(() => {
     let amount = 0, advance = 0, subtotal = 0;
     for (const g of groups) {
       amount   += g.total;
       advance  += g.advance;
-      subtotal += Math.max(0, g.total - g.advance);
+      subtotal += Math.max(0, g.total - g.rejectedAmt - g.paidAmt - g.advance);
     }
     return { amount, advance, subtotal };
   }, [groups]);
@@ -2841,7 +2998,7 @@ function MonthlySummaryModal({ allExpenses, monthFilter, onClose }) {
               </thead>
               <tbody className="divide-y divide-zinc-100">
                 {groups.map((g) => {
-                  const subtotal = Math.max(0, g.total - g.advance);
+                  const subtotal = Math.max(0, g.total - g.rejectedAmt - g.paidAmt - g.advance);
                   return (
                     <tr key={g.userId}>
                       <td className="px-3 py-2">
@@ -3867,7 +4024,7 @@ function AdvancesTable({ items, onAddAdvance }) {
             </tr>
           ) : (
             items.map((g) => {
-              const net = g.totalAmount - g.totalAdvance;
+              const net = g.totalAmount - (g.rejectedAmt || 0) - (g.paidAmt || 0) - g.totalAdvance;
               return (
                 <tr key={g.userId} className="hover:bg-zinc-50/60">
                   <td className="px-4 py-2">

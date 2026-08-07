@@ -36,7 +36,6 @@ export function useLogin() {
 }
 
 export function useSignup() {
-  const qc = useQueryClient();
   return useMutation({
     mutationFn: (form) =>
       api
@@ -50,10 +49,11 @@ export function useSignup() {
           department: form.department || null,
         })
         .then((r) => r.data),
+    // New accounts start inactive — no tokens are issued, and an HR admin
+    // must activate the account (Employees page) before it can log in.
+    // Don't save auth state or route into the dashboard here.
     onSuccess: (data) => {
-      auth.save(data);
-      qc.setQueryData(qk.me, data.user);
-      toast.success(`Account created — welcome, ${fullName(data.user)}`);
+      toast.success(data?.message || "Account created — an HR admin needs to activate it before you can log in.");
     },
     onError: (err) => {
       toast.error(err.message || "Signup failed");

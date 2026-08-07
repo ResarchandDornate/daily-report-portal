@@ -61,8 +61,16 @@ export default function LoginPage() {
         return;
       }
       try {
+        // No tokens are issued — the account starts inactive until HR
+        // approves it — so there's nothing to log into yet. Success is
+        // surfaced via the mutation's toast; just drop back to the login
+        // tab with the fields cleared instead of routing into the dashboard.
         await signupMutation.mutateAsync(signupData);
-        router.push("/dashboard");
+        setIsSignup(false);
+        setSignupData({
+          email: "", username: "", firstName: "", lastName: "",
+          contactNumber: "", department: "", password: "", confirmPassword: "",
+        });
       } catch {
         // Server-side error already surfaced as a toast via the mutation.
       }
