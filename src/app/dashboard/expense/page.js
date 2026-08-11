@@ -42,6 +42,8 @@ const TRAVEL_TYPES = [
   { value: "car",    label: "Car" },
   { value: "bike",   label: "Bike" },
   { value: "cab",    label: "Cab" },
+  { value: "ola",    label: "Ola Cab" },
+  { value: "uber",   label: "Uber" },
   { value: "rapido", label: "Rapido" },
   { value: "other",  label: "Others" },
 ];
@@ -60,9 +62,11 @@ const PER_KM_RATES = {
   bike:   5,
   cab:    0,
   rapido: 0,
+  ola:    0,
+  uber:   0,
 };
 
-const KM_BASED_TYPES = new Set(["car", "bike", "cab", "rapido"]);
+const KM_BASED_TYPES = new Set(["car", "bike", "cab", "rapido", "ola", "uber"]);
 
 const MODES = [
   { value: "cash", label: "Cash" },
@@ -1192,7 +1196,7 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
     let finalTravelType = "";
     if (expenseType === "travel") {
       if (!travelType) {
-        toast.error("Pick a travel type (car, bike, cab, rapido, or others).");
+        toast.error("Pick a travel type (car, bike, cab, Ola, Uber, rapido, or others).");
         return null;
       }
       if (travelType === "other") {
@@ -1335,28 +1339,26 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
         )}
         {expenseType === "travel" && KM_BASED_TYPES.has(travelType) && (
           <>
-            <Field label="Distance (km)">
+            <Field label="Distance (km) — optional">
               <input
                 type="number"
                 min={0}
                 step="0.1"
                 value={kilometers}
                 onChange={(e) => setKilometers(e.target.value)}
-                placeholder="0"
+                placeholder="Optional"
                 className={inputClass}
-                required
               />
             </Field>
-            <Field label="Rate (₹ / km)">
+            <Field label="Rate (₹ / km) — optional">
               <input
                 type="number"
                 min={0}
                 step="0.5"
                 value={ratePerKm}
                 onChange={(e) => setRatePerKm(e.target.value)}
-                placeholder="0"
+                placeholder="Optional"
                 className={inputClass}
-                required
               />
             </Field>
           </>
