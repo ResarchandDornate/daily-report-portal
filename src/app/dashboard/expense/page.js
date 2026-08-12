@@ -987,6 +987,11 @@ export default function ExpensePage() {
               await updateExpense.mutateAsync({ id, site_name });
             } catch {}
           }}
+          onAddBills={isCoordinator ? undefined : async (id, files) => {
+            try {
+              await addBills.mutateAsync({ id, files });
+            } catch {}
+          }}
           decidePending={decideExpense.isPending}
           updatingType={updateExpense.isPending}
           hideOnHold={isTariniReviewer}
@@ -2226,10 +2231,37 @@ function SiteCell({ row, onSave, disabled }) {
   );
 }
 
+// HR-side "+ Bill" uploader — lets HR attach bill files to an employee's
+// pending expense straight from the admin modal.  The backend already
+// permits HR on any expense (same gate as PATCH), so this is pure UI.
+function AddBillButton({ row, onAdd, disabled }) {
+  return (
+    <label
+      className={`inline-flex shrink-0 cursor-pointer items-center justify-center rounded border border-dashed border-zinc-300 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 hover:border-orange-400 hover:text-orange-600 ${disabled ? "pointer-events-none opacity-50" : ""}`}
+      title="Upload bill(s) for this expense"
+      onClick={(e) => e.stopPropagation()}
+    >
+      + Bill
+      <input
+        type="file"
+        multiple
+        accept="image/*,application/pdf"
+        className="hidden"
+        disabled={disabled}
+        onChange={(e) => {
+          const files = Array.from(e.target.files || []);
+          e.target.value = ""; // allow re-picking the same file next time
+          if (files.length) onAdd(row.id, files);
+        }}
+      />
+    </label>
+  );
+}
+
 // `onDecide` omitted => the approve / reject / hold controls (and the row
 // checkboxes that drive them) disappear entirely.  Finance gets `onMarkPaid`
 // instead: they disburse, they don't decide.
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, onUpdateRemarks, onUpdateSite, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, onUpdateRemarks, onUpdateSite, onAddBills, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -2640,10 +2672,15 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                             {isAdvanceRow ? (
                               <span className="text-zinc-400">—</span>
                             ) : (
-                              <BillThumbnail
-                                expense={r}
-                                onOpen={(expense) => setPreview(expense)}
-                              />
+                              <div className="flex items-center gap-1.5">
+                                <BillThumbnail
+                                  expense={r}
+                                  onOpen={(expense) => setPreview(expense)}
+                                />
+                                {onAddBills && r.status === "pending" && (
+                                  <AddBillButton row={r} onAdd={onAddBills} disabled={updatingType} />
+                                )}
+                              </div>
                             )}
                           </Table.Td>
                           <Table.Td className="max-w-[320px] text-zinc-700">
