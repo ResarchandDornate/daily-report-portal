@@ -982,6 +982,11 @@ export default function ExpensePage() {
               await updateExpense.mutateAsync({ id, remarks });
             } catch {}
           }}
+          onUpdateSite={isCoordinator ? undefined : async (id, site_name) => {
+            try {
+              await updateExpense.mutateAsync({ id, site_name });
+            } catch {}
+          }}
           decidePending={decideExpense.isPending}
           updatingType={updateExpense.isPending}
           hideOnHold={isTariniReviewer}
@@ -2180,10 +2185,51 @@ function RemarksCell({ row, onSave, disabled }) {
   );
 }
 
+// Same idea as RemarksCell but for the site name — HR clicks the cell to
+// edit in place, saves on blur/Enter, Escape reverts.  Shown untruncated so
+// the full site text is always readable.
+function SiteCell({ row, onSave, disabled }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(row.site_name || "");
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); setValue(row.site_name || ""); setEditing(true); }}
+        className="block max-w-[240px] whitespace-pre-wrap rounded px-1 py-0.5 text-left text-zinc-700 hover:bg-orange-50 hover:text-orange-700"
+        title={row.site_name ? `${row.site_name} (click to edit)` : "Click to add a site"}
+      >
+        {row.site_name || <span className="text-zinc-300">—</span>}
+      </button>
+    );
+  }
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={value}
+      disabled={disabled}
+      onChange={(e) => setValue(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      onBlur={() => {
+        setEditing(false);
+        const trimmed = value.trim();
+        if (trimmed !== (row.site_name || "")) onSave(row.id, trimmed);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") e.currentTarget.blur();
+        if (e.key === "Escape") { setValue(row.site_name || ""); setEditing(false); }
+      }}
+      className="w-full max-w-[240px] rounded border border-orange-300 bg-white px-1.5 py-0.5 text-[11px] text-zinc-800 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500/20"
+    />
+  );
+}
+
 // `onDecide` omitted => the approve / reject / hold controls (and the row
 // checkboxes that drive them) disappear entirely.  Finance gets `onMarkPaid`
 // instead: they disburse, they don't decide.
-function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, onUpdateRemarks, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
+function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdateType, onUpdateRemarks, onUpdateSite, decidePending, updatingType, hideOnHold, onMarkPaid, markPaidPending, onDownloadExcel }) {
   // Full-screen image preview state — set to { url, filename } when a bill
   // thumbnail is clicked.  Click anywhere outside the image to close.
   const [preview, setPreview] = useState(null);
@@ -2569,8 +2615,14 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                             )}
                           </Table.Td>
                           <Table.Td className="capitalize">{r.mode || "—"}</Table.Td>
-                          <Table.Td className="max-w-45 truncate text-zinc-700" title={r.site_name}>
-                            {r.site_name || "—"}
+                          <Table.Td className="max-w-[240px] text-zinc-700">
+                            {onUpdateSite && !isAdvanceRow && r.status === "pending" ? (
+                              // HR can fix the site text in place — same
+                              // gate as the Type / Remarks editors.
+                              <SiteCell row={r} onSave={onUpdateSite} disabled={updatingType} />
+                            ) : (
+                              <span className="whitespace-pre-wrap" title={r.site_name}>{r.site_name || "—"}</span>
+                            )}
                           </Table.Td>
                           <Table.Td className="text-right tabular-nums font-medium">
                             {isAdvanceRow ? "—" : `₹${(r.amount || 0).toLocaleString("en-IN")}`}
