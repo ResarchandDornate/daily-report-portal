@@ -436,7 +436,7 @@ export function useExpenses() {
 export function useCreateExpense() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ date, mode, expense_type, travel_type, amount, advance, site_name, remarks, bills }) => {
+    mutationFn: ({ date, mode, expense_type, travel_type, amount, advance, site_name, remarks, bills, on_behalf_of }) => {
       const fd = new FormData();
       fd.append("date", date);
       fd.append("mode", mode || "");
@@ -446,6 +446,8 @@ export function useCreateExpense() {
       fd.append("advance", String(advance || 0));
       if (site_name) fd.append("site_name", site_name);
       if (remarks) fd.append("remarks", remarks);
+      // Delegate filing on behalf of another employee (server authorizes).
+      if (on_behalf_of) fd.append("on_behalf_of", String(on_behalf_of));
       // Multi-file: append once per file under the same field name so the
       // FastAPI endpoint receives them as `bills: list[UploadFile]`.
       for (const f of (bills || [])) {
@@ -494,6 +496,19 @@ export function useDeleteExpense() {
       toast.success("Expense deleted");
     },
     onError: (err) => toast.error(err.message || "Failed to delete expense"),
+  });
+}
+
+// Delegate scope — which employees (if any) the current user may file
+// expenses for.  The server returns {department:null, employees:[]} for
+// everyone except configured delegates (e.g. Reception filing for Sales),
+// so the form can call this unconditionally to decide whether to show
+// the "Filing for" picker.
+export function useExpenseDelegateScope() {
+  return useQuery({
+    queryKey: ["expenseDelegateScope"],
+    queryFn: () => api.get("/api/expenses/delegate/employees").then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
   });
 }
 

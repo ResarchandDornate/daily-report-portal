@@ -17,6 +17,7 @@ import {
   useUpdateExpense,
   useIssueAdvance,
   useRecordAdvance,
+  useExpenseDelegateScope,
 } from "@/lib/queries";
 import { Table } from "@/components/Table";
 
@@ -131,13 +132,22 @@ export default function ExpensePage() {
     if (!me) return false;
     return _isCoordinatorEmail(me.email);
   }, [me]);
+  // Expense delegate (e.g. Nitika in Reception filing for Sales) — the
+  // server returns her scoped department + employee list; everyone else
+  // gets an empty scope.  Delegates get the grouped admin-style view of
+  // their department (read-only, no approve buttons) plus a "Filing for"
+  // picker on the expense form.
+  const { data: delegateScope } = useExpenseDelegateScope();
+  const delegateEmployees = delegateScope?.employees || [];
+  const isDelegate = delegateEmployees.length > 0;
   const isAdmin = useMemo(() => {
     if (!me) return false;
     if (me.role === "hr") return true;
     if (_isApproverEmail(me.email)) return true;
     if (_isFinanceApproverEmail(me.email)) return true;
+    if (isDelegate) return true;
     return _isCoordinatorEmail(me.email);
-  }, [me]);
+  }, [me, isDelegate]);
   // Tarini's account is review-only — she doesn't file her own expenses
   // through this form.  Smita + HR still get the form because they can.
   const isTariniReviewer = useMemo(() => {
@@ -606,6 +616,7 @@ export default function ExpensePage() {
                 }}
                 submitting={createExpense.isPending}
                 pastSiteNames={pastSiteNames}
+                delegateEmployees={delegateEmployees}
               />
             </div>
           </div>
@@ -768,7 +779,9 @@ export default function ExpensePage() {
           monthFilter={monthFilter}
           employeeMonthlySummary={employeeMonthlySummary}
           isFinanceApprover={isFinanceApprover}
-          isCoordinator={isCoordinator}
+          // Delegates get the same read-only grouped table as coordinators —
+          // they file and fix expenses but never approve/reject/mark-paid.
+          isCoordinator={isCoordinator || isDelegate}
           markPaidPending={markPaid.isPending}
           onBatchMarkPaid={(group) => {
             const approvedRows = group.expenses.filter((e) => e.status === "approved");
@@ -963,7 +976,7 @@ export default function ExpensePage() {
           // Finance approvers disburse but never decide, and coordinators are
           // fully read-only — withholding onDecide strips the approve / reject /
           // hold controls from the modal.
-          onDecide={(isFinanceApprover || isCoordinator) ? undefined : async (id, decision, note = "") => {
+          onDecide={(isFinanceApprover || isCoordinator || isDelegate) ? undefined : async (id, decision, note = "") => {
             try {
               await decideExpense.mutateAsync({ id, decision, note });
             } catch {}
@@ -1085,7 +1098,10 @@ export default function ExpensePage() {
   );
 }
 
-function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
+function ExpenseForm({ onSubmit, submitting, pastSiteNames = [], delegateEmployees = [] }) {
+  // Delegate filing target — "" means the caller themself.  Only rendered
+  // when the server granted this user a delegate scope.
+  const [forUserId, setForUserId] = useState("");
   const [date, setDate] = useState(todayISO());
   const [mode, setMode] = useState("cash");
   const [expenseType, setExpenseType] = useState("food");
@@ -1238,6 +1254,8 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
       site_name: siteName.trim(),
       remarks: finalRemarks,
       bills,
+      // Delegate filing for another employee — undefined for self.
+      on_behalf_of: forUserId ? Number(forUserId) : undefined,
     };
   }
 
@@ -1287,6 +1305,26 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [] }) {
       onSubmit={handleAddToBatch}
       className="space-y-4"
     >
+      {delegateEmployees.length > 0 && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50/60 p-3">
+          <Field label="Filing expense for">
+            <select
+              value={forUserId}
+              onChange={(e) => setForUserId(e.target.value)}
+              className={inputClass}
+            >
+              <option value="">Myself</option>
+              {delegateEmployees.map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+          </Field>
+          <p className="mt-1 text-[11px] text-zinc-500">
+            The expense will belong to the selected employee — approval and
+            payout flow to them, not to you.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Field label="Date">
           <input
