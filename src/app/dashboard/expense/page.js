@@ -206,6 +206,19 @@ export default function ExpensePage() {
     );
   }, [rawExpenses]);
 
+  // For delegates the Add Advance picker is their scoped department's
+  // employees (covers people with no expenses yet, excludes themself).
+  const delegateEmployeeList = useMemo(
+    () =>
+      delegateEmployees.map((u) => ({
+        id: u.id,
+        first_name: (u.name || "").split(" ")[0] || "",
+        last_name: (u.name || "").split(" ").slice(1).join(" ") || "",
+        department_name: delegateScope?.department?.name || "",
+      })),
+    [delegateEmployees, delegateScope]
+  );
+
   // Two-tier modal state for the admin view: first a list of all expenses
   // for one employee, then a per-expense detail modal opened from that list.
   // Employee view skips the employee modal and goes straight to detail.
@@ -952,7 +965,8 @@ export default function ExpensePage() {
 
       {addAdvanceOpen && (
         <AddAdvanceModal
-          employees={employeeList}
+          employees={isDelegate ? delegateEmployeeList : employeeList}
+          simpleMode={isDelegate}
           saving={issueAdvance.isPending}
           onClose={() => setAddAdvanceOpen(false)}
           onSave={async (data) => {
@@ -3893,7 +3907,9 @@ function EmployeeAdvanceModal({ onClose, onSave, saving }) {
   );
 }
 
-function AddAdvanceModal({ employees, onClose, onSave, saving }) {
+// simpleMode — for delegates: the approved-by / paid fields are hidden
+// because the server forces their advances to "pending" (HR confirms).
+function AddAdvanceModal({ employees, onClose, onSave, saving, simpleMode = false }) {
   const [employeeId, setEmployeeId] = useState("");
   const [amount, setAmount]         = useState("");
   const [date, setDate]             = useState(todayISO());
@@ -3970,51 +3986,61 @@ function AddAdvanceModal({ employees, onClose, onSave, saving }) {
               />
             </div>
           </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-zinc-600">Approved by (optional)</label>
-            <input
-              type="text"
-              value={approvedBy}
-              onChange={(e) => setApprovedBy(e.target.value)}
-              placeholder="e.g. Tarini Aggrawal"
-              className={inputCls}
-              maxLength={120}
-            />
-          </div>
+          {!simpleMode && (
+            <>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-zinc-600">Approved by (optional)</label>
+                <input
+                  type="text"
+                  value={approvedBy}
+                  onChange={(e) => setApprovedBy(e.target.value)}
+                  placeholder="e.g. Tarini Aggrawal"
+                  className={inputCls}
+                  maxLength={120}
+                />
+              </div>
 
-          {/* Payment details — filling the paid date records the advance as
-              already disbursed instead of leaving it in the pending queue. */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid date (optional)</label>
-              <input
-                type="date"
-                value={paidDate}
-                max={todayISO()}
-                onChange={(e) => {
-                  setPaidDate(e.target.value);
-                  if (!e.target.value) setPaidAmount("");
-                }}
-                className={inputCls}
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid amount (₹)</label>
-              <input
-                type="number"
-                min={0}
-                value={paidAmount}
-                onChange={(e) => setPaidAmount(e.target.value)}
-                placeholder={paidDate ? String(amount || 0) : "—"}
-                disabled={!paidDate}
-                className={`${inputCls} disabled:bg-zinc-50 disabled:text-zinc-400`}
-              />
-            </div>
-          </div>
-          {paidDate && (
-            <p className="-mt-2 text-[10px] text-zinc-500">
-              Marks this advance as paid. Leave the amount blank to record the full ₹
-              {Number(amount || 0).toLocaleString("en-IN")}.
+              {/* Payment details — filling the paid date records the advance as
+                  already disbursed instead of leaving it in the pending queue. */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid date (optional)</label>
+                  <input
+                    type="date"
+                    value={paidDate}
+                    max={todayISO()}
+                    onChange={(e) => {
+                      setPaidDate(e.target.value);
+                      if (!e.target.value) setPaidAmount("");
+                    }}
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid amount (₹)</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={paidAmount}
+                    onChange={(e) => setPaidAmount(e.target.value)}
+                    placeholder={paidDate ? String(amount || 0) : "—"}
+                    disabled={!paidDate}
+                    className={`${inputCls} disabled:bg-zinc-50 disabled:text-zinc-400`}
+                  />
+                </div>
+              </div>
+              {paidDate && (
+                <p className="-mt-2 text-[10px] text-zinc-500">
+                  Marks this advance as paid. Leave the amount blank to record the full ₹
+                  {Number(amount || 0).toLocaleString("en-IN")}.
+                </p>
+              )}
+            </>
+          )}
+          {simpleMode && (
+            <p className="text-[11px] text-zinc-500">
+              The advance is recorded as <b>pending</b> — HR / finance confirm
+              approval and payment.
             </p>
           )}
 
