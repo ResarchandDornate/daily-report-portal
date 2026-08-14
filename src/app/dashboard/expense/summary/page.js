@@ -48,9 +48,12 @@ export default function ExpenseSummaryPage() {
     return rawExpenses.filter((e) => e.user_id === me.id);
   }, [rawExpenses, me, isAdmin]);
 
-  // Pivot: rows = employee × cell (total, paid).  Rejected expenses are
-  // excluded so they don't inflate the numbers or drag the colour.
-  const { rows, grandTotal, grandPaid, monthTotals, monthPaid, years } = useMemo(() => {
+  // Pivot: rows = employee × cell (total, advance, paid).  Rejected expenses
+  // are excluded so they don't inflate the numbers or drag the colour.
+  // Advances (both advance-only rows and the advance portion of normal rows)
+  // are tracked separately so every total can be shown NET of advance —
+  // matching the Net Payable convention on the main expense page.
+  const { rows, grandTotal, grandAdvance, grandPaid, monthTotals, monthAdvance, monthPaid, years } = useMemo(() => {
     const yearSet = new Set([now.getFullYear()]);
     const byUser = new Map();
     for (const e of scopedExpenses) {
@@ -67,15 +70,19 @@ export default function ExpenseSummaryPage() {
           userId: key,
           name: e.user_name || "—",
           dept: e.user_department || "",
-          months: Array.from({ length: 12 }, () => ({ total: 0, paid: 0 })),
+          months: Array.from({ length: 12 }, () => ({ total: 0, advance: 0, paid: 0 })),
           total: 0,
+          advance: 0,
           paid: 0,
         });
       }
       const g = byUser.get(key);
       const amt = Number(e.amount) || 0;
+      const adv = Number(e.advance) || 0;
       g.months[mo].total += amt;
       g.total += amt;
+      g.months[mo].advance += adv;
+      g.advance += adv;
       if (e.status === "paid") {
         g.months[mo].paid += amt;
         g.paid += amt;
@@ -90,19 +97,28 @@ export default function ExpenseSummaryPage() {
       return (a.name || "").toLowerCase().localeCompare((b.name || "").toLowerCase());
     });
     const mt = Array(12).fill(0);
+    const ma = Array(12).fill(0);
     const mp = Array(12).fill(0);
     let gt = 0;
+    let ga = 0;
     let gp = 0;
     for (const r of arr) {
-      for (let i = 0; i < 12; i++) { mt[i] += r.months[i].total; mp[i] += r.months[i].paid; }
+      for (let i = 0; i < 12; i++) {
+        mt[i] += r.months[i].total;
+        ma[i] += r.months[i].advance;
+        mp[i] += r.months[i].paid;
+      }
       gt += r.total;
+      ga += r.advance;
       gp += r.paid;
     }
     return {
       rows: arr,
       grandTotal: gt,
+      grandAdvance: ga,
       grandPaid: gp,
       monthTotals: mt,
+      monthAdvance: ma,
       monthPaid: mp,
       years: Array.from(yearSet).sort((a, b) => b - a),
     };
@@ -121,8 +137,11 @@ export default function ExpenseSummaryPage() {
   const sortValue = (r, key) => {
     if (key === "name")  return (r.name || "").toLowerCase();
     if (key === "dept")  return (r.dept || "").toLowerCase();
-    if (key === "total") return r.total || 0;
-    if (key?.startsWith("m")) return r.months[Number(key.slice(1))]?.total || 0;
+    if (key === "total") return (r.total || 0) - (r.advance || 0);
+    if (key?.startsWith("m")) {
+      const c = r.months[Number(key.slice(1))];
+      return c ? (c.total || 0) - (c.advance || 0) : 0;
+    }
     return 0;
   };
 
@@ -131,8 +150,10 @@ export default function ExpenseSummaryPage() {
   const {
     visibleRows,
     visibleMonthTotals,
+    visibleMonthAdvance,
     visibleMonthPaid,
     visibleGrandTotal,
+    visibleGrandAdvance,
     visibleGrandPaid,
   } = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -150,19 +171,28 @@ export default function ExpenseSummaryPage() {
       });
     }
     const mt = Array(12).fill(0);
+    const ma = Array(12).fill(0);
     const mp = Array(12).fill(0);
     let gt = 0;
+    let ga = 0;
     let gp = 0;
     for (const r of filtered) {
-      for (let i = 0; i < 12; i++) { mt[i] += r.months[i].total; mp[i] += r.months[i].paid; }
+      for (let i = 0; i < 12; i++) {
+        mt[i] += r.months[i].total;
+        ma[i] += r.months[i].advance;
+        mp[i] += r.months[i].paid;
+      }
       gt += r.total;
+      ga += r.advance;
       gp += r.paid;
     }
     return {
       visibleRows: filtered,
       visibleMonthTotals: mt,
+      visibleMonthAdvance: ma,
       visibleMonthPaid: mp,
       visibleGrandTotal: gt,
+      visibleGrandAdvance: ga,
       visibleGrandPaid: gp,
     };
   }, [rows, search, sortKey, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -198,20 +228,30 @@ export default function ExpenseSummaryPage() {
 
   function handleDownload() {
     // Mirrors the table, sort and all — visibleRows is already ordered.
-    const header = ["#", "Employee", "Department", ...MONTHS_SHORT, "Total"];
+    // Month cells carry the gross expense; the Advance and Net columns give
+    // the same "expenses − advance" breakdown the table's Total column shows.
+    const header = ["#", "Employee", "Department", ...MONTHS_SHORT, "Expenses", "Advance", "Net"];
     const dataRows = visibleRows.map((r, i) => [
       i + 1,
       r.name,
       r.dept || "",
       ...r.months.map((m) => m.total || 0),
       r.total || 0,
+      r.advance || 0,
+      (r.total || 0) - (r.advance || 0),
     ]);
-    const footer = ["", "Total", "", ...visibleMonthTotals.map((v) => v || 0), visibleGrandTotal || 0];
+    const footer = [
+      "", "Total", "",
+      ...visibleMonthTotals.map((v) => v || 0),
+      visibleGrandTotal || 0,
+      visibleGrandAdvance || 0,
+      (visibleGrandTotal || 0) - (visibleGrandAdvance || 0),
+    ];
     const ws = XLSX.utils.aoa_to_sheet([header, ...dataRows, footer]);
     ws["!cols"] = [
       { wch: 5 }, { wch: 24 }, { wch: 22 },
       ...MONTHS_SHORT.map(() => ({ wch: 11 })),
-      { wch: 14 },
+      { wch: 14 }, { wch: 12 }, { wch: 14 },
     ];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, `Yearly ${year}`);
@@ -237,8 +277,13 @@ export default function ExpenseSummaryPage() {
             </p>
           </div>
           <div className="text-right tabular-nums">
-            <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total {year}</div>
-            <div className="text-sm font-bold text-orange-700">{nf(visibleGrandTotal)}</div>
+            <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Net {year} (after advance)</div>
+            <div className="text-sm font-bold text-orange-700">{nf(visibleGrandTotal - visibleGrandAdvance)}</div>
+            {visibleGrandAdvance > 0 && (
+              <div className="text-[10px] text-zinc-500">
+                {nf(visibleGrandTotal)} expenses − {nf(visibleGrandAdvance)} advance
+              </div>
+            )}
             <div className="text-[10px] text-emerald-700">{nf(visibleGrandPaid)} paid</div>
           </div>
         </div>
@@ -331,18 +376,32 @@ export default function ExpenseSummaryPage() {
                     <td className="px-2 py-2 text-zinc-600 whitespace-nowrap">{r.dept || "—"}</td>
                     {r.months.map((cell, mi) => {
                       const cls = statusColor(cell.total, cell.paid);
-                      const title = cell.total > 0 ? `Total ${nf(cell.total)} · Paid ${nf(cell.paid)}` : "";
+                      const hasAny = cell.total > 0 || cell.advance > 0;
+                      const title = hasAny
+                        ? `Expenses ${nf(cell.total)} · Advance ${nf(cell.advance)} · Net ${nf(cell.total - cell.advance)} · Paid ${nf(cell.paid)}`
+                        : "";
                       return (
                         <td key={mi} className={`px-2 py-2 text-right tabular-nums font-medium ${cls}`} title={title}>
-                          {cell.total > 0 ? nf(cell.total) : "—"}
+                          {cell.total > 0 ? nf(cell.total) : hasAny ? "—" : "—"}
+                          {cell.advance > 0 && (
+                            <div className="text-[10px] font-normal text-amber-600 whitespace-nowrap">
+                              adv −{nf(cell.advance)}
+                            </div>
+                          )}
                         </td>
                       );
                     })}
+                    {/* Total column = NET payable: expenses minus advance. */}
                     <td
                       className={`px-2 py-2 text-right tabular-nums font-semibold whitespace-nowrap ${statusColor(r.total, r.paid)}`}
-                      title={`Total ${nf(r.total)} · Paid ${nf(r.paid)}`}
+                      title={`Expenses ${nf(r.total)} · Advance ${nf(r.advance)} · Net ${nf(r.total - r.advance)} · Paid ${nf(r.paid)}`}
                     >
-                      {nf(r.total)}
+                      {nf(r.total - r.advance)}
+                      {r.advance > 0 && (
+                        <div className="text-[10px] font-normal text-zinc-500 whitespace-nowrap">
+                          {nf(r.total)} − {nf(r.advance)} adv
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -353,15 +412,34 @@ export default function ExpenseSummaryPage() {
                   <td className="sticky bottom-0 left-10 z-30 bg-orange-50 px-2 py-2 whitespace-nowrap border-t border-orange-100">Total</td>
                   <td className="sticky bottom-0 z-20 bg-orange-50 px-2 py-2 border-t border-orange-100" />
                   {visibleMonthTotals.map((v, i) => {
+                    const adv = visibleMonthAdvance[i] || 0;
                     const cls = statusColor(v, visibleMonthPaid[i]);
                     return (
-                      <td key={i} className={`sticky bottom-0 z-20 bg-orange-50 px-2 py-2 text-right tabular-nums border-t border-orange-100 ${cls}`}>
+                      <td
+                        key={i}
+                        className={`sticky bottom-0 z-20 bg-orange-50 px-2 py-2 text-right tabular-nums border-t border-orange-100 ${cls}`}
+                        title={v > 0 || adv > 0 ? `Expenses ${nf(v)} · Advance ${nf(adv)} · Net ${nf(v - adv)}` : ""}
+                      >
                         {v > 0 ? nf(v) : "—"}
+                        {adv > 0 && (
+                          <div className="text-[10px] font-normal text-amber-700 whitespace-nowrap">
+                            adv −{nf(adv)}
+                          </div>
+                        )}
                       </td>
                     );
                   })}
-                  <td className={`sticky bottom-0 z-20 bg-orange-50 px-2 py-2 text-right tabular-nums whitespace-nowrap border-t border-orange-100 ${statusColor(visibleGrandTotal, visibleGrandPaid)}`}>
-                    {nf(visibleGrandTotal)}
+                  {/* Grand total = NET after advance, matching the header. */}
+                  <td
+                    className={`sticky bottom-0 z-20 bg-orange-50 px-2 py-2 text-right tabular-nums whitespace-nowrap border-t border-orange-100 ${statusColor(visibleGrandTotal, visibleGrandPaid)}`}
+                    title={`Expenses ${nf(visibleGrandTotal)} · Advance ${nf(visibleGrandAdvance)} · Net ${nf(visibleGrandTotal - visibleGrandAdvance)}`}
+                  >
+                    {nf(visibleGrandTotal - visibleGrandAdvance)}
+                    {visibleGrandAdvance > 0 && (
+                      <div className="text-[10px] font-normal text-zinc-500 whitespace-nowrap">
+                        {nf(visibleGrandTotal)} − {nf(visibleGrandAdvance)} adv
+                      </div>
+                    )}
                   </td>
                 </tr>
               </tfoot>
