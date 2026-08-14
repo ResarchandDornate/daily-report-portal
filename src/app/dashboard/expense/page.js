@@ -237,6 +237,36 @@ export default function ExpensePage() {
     const now = new Date();
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   });
+  // Deep link from the Summary page: /dashboard/expense?emp=<userId> opens
+  // that employee's modal once the rows have loaded (admin views only).
+  // Reads window.location directly instead of useSearchParams so the page
+  // needs no Suspense boundary; the query is cleaned afterwards so closing
+  // the modal doesn't reopen it on refresh.
+  useEffect(() => {
+    const uid = Number(new URLSearchParams(window.location.search).get("emp") || 0);
+    if (!uid || !isAdmin || empModal || !rawExpenses.length) return;
+    const all = rawExpenses
+      .filter((e) => e.user_id === uid)
+      .filter((e) => !monthFilter || monthFilter === "all" || (e.date && e.date.startsWith(monthFilter)));
+    const anyRow = rawExpenses.find((e) => e.user_id === uid);
+    if (!anyRow) return;
+    const rows = all.length ? all : rawExpenses.filter((e) => e.user_id === uid);
+    setEmpModal({
+      userId: uid,
+      userName: anyRow.user_name || "—",
+      userDepartment: anyRow.user_department || "",
+      expenses: rows.slice().sort((a, b) => (a.date < b.date ? 1 : -1)),
+      total: rows.reduce((s, e) => s + (e.amount || 0), 0),
+      advance: rows.reduce((s, e) => s + (e.advance || 0), 0),
+      pendingCount: rows.filter((e) => e.status === "pending").length,
+      approvedCount: rows.filter((e) => e.status === "approved").length,
+      rejectedCount: rows.filter((e) => e.status === "rejected").length,
+      onHoldCount: rows.filter((e) => e.status === "onhold").length,
+      paidCount: rows.filter((e) => e.status === "paid").length,
+      withBillsCount: rows.filter((e) => (e.bills || []).length > 0).length,
+    });
+    window.history.replaceState(null, "", window.location.pathname);
+  }, [isAdmin, rawExpenses, monthFilter, empModal]);
   // Shivangi opens the page focused on the disbursal queue, so default
   // her status filter to "approved" (her Paid button targets approved
   // rows).  Everyone else starts on "all".

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import * as XLSX from "xlsx";
 import { useExpenses, useMe } from "@/lib/queries";
 
@@ -371,7 +372,15 @@ export default function ExpenseSummaryPage() {
                       {i + 1}
                     </td>
                     <td className="sticky left-10 z-10 bg-white px-2 py-2 font-medium text-zinc-900 whitespace-nowrap">
-                      {r.name}
+                      {/* Clicking a name jumps to the Expense page and opens
+                          that employee's detail modal (?emp= deep link). */}
+                      <Link
+                        href={`/dashboard/expense?emp=${r.userId}`}
+                        className="hover:text-orange-700 hover:underline underline-offset-2"
+                        title={`Open ${r.name}'s expenses`}
+                      >
+                        {r.name}
+                      </Link>
                     </td>
                     <td className="px-2 py-2 text-zinc-600 whitespace-nowrap">{r.dept || "—"}</td>
                     {r.months.map((cell, mi) => {
