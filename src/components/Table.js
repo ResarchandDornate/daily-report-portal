@@ -64,12 +64,14 @@ function Row({ children, className = "", ...props }) {
   );
 }
 
+// Compact cells on phones, roomier from sm: up — keeps the horizontally
+// scrolled tables tight and aligned on small screens.
 function Th({ children, className = "", ...props }) {
-  return <th className={`whitespace-nowrap px-3 py-2.5 ${className}`} {...props}>{children}</th>;
+  return <th className={`whitespace-nowrap px-2 py-2 sm:px-3 sm:py-2.5 ${className}`} {...props}>{children}</th>;
 }
 
 function Td({ children, className = "", ...props }) {
-  return <td className={`px-3 py-2.5 align-middle ${className}`} {...props}>{children}</td>;
+  return <td className={`px-2 py-2 align-middle sm:px-3 sm:py-2.5 ${className}`} {...props}>{children}</td>;
 }
 
 function Foot({ children }) {

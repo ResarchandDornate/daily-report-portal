@@ -142,7 +142,7 @@ export default function LeavesPage() {
       </header>
 
       {/* Stat strip */}
-      <section className="grid grid-cols-3 gap-3">
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <MiniStat label="On leave today" value={onLeaveToday} tone="amber" />
         <MiniStat label="Total leave days" value={totalDays} tone="zinc" />
         <MiniStat label="Unique employees" value={uniqueEmployees} tone="zinc" />

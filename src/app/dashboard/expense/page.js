@@ -605,7 +605,7 @@ export default function ExpensePage() {
             </p>
           </div>
           {/* Header totals — expense, advance, net payable */}
-          <div className="flex items-center gap-4 tabular-nums">
+          <div className="flex flex-wrap items-center gap-4 tabular-nums">
             <div className="text-right">
               <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-400">Total Expense</div>
               <div className="text-sm font-bold text-orange-700">
@@ -637,7 +637,7 @@ export default function ExpensePage() {
 
       {/* Add Expense modal */}
       {addExpenseOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-zinc-900/60 p-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-zinc-900/60 p-3 sm:p-6">
           <div className="relative w-full max-w-6xl rounded-xl bg-white shadow-xl">
             <div className="flex items-center justify-between border-b border-zinc-200 px-6 py-4">
               <h2 className="text-base font-semibold text-zinc-900">New Expense</h2>
@@ -1558,6 +1558,7 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [], delegateEmploye
               Click <span className="font-semibold">Submit all</span> to file every row.
             </p>
           </div>
+          <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-zinc-100 text-[11px]">
             <thead className="bg-white/60 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
               <tr>
@@ -1613,6 +1614,7 @@ function ExpenseForm({ onSubmit, submitting, pastSiteNames = [], delegateEmploye
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -2100,16 +2102,16 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                 </Table.Td>
               )}
               <Table.Td className="text-right">
-                <div className="flex items-center justify-end gap-1.5">
+                <div className="flex items-center justify-end gap-1 sm:gap-1.5">
                 {/* Always available, whichever action branch renders below.
                     Stops propagation so it doesn't also open the row modal. */}
                 <button
                   type="button"
                   onClick={(e) => { e.stopPropagation(); downloadEmployeePDF(g, monthFilter); }}
-                  className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-[11px] font-medium text-zinc-600 hover:bg-zinc-50"
+                  className="whitespace-nowrap rounded border border-zinc-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700"
                   title="Download expense report as PDF"
                 >
-                  ⬇ PDF
+                  PDF
                 </button>
                 {/* Coordinators are read-only: PDF + Open only, no decisions. */}
                 {isCoordinator ? null : isFinanceApprover ? (
@@ -2118,14 +2120,14 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   // employee's group.  No approve / reject controls.
                   g.approvedCount > 0 ? (
                     <div
-                      className="flex items-center justify-end gap-1.5"
+                      className="flex items-center justify-end gap-1 sm:gap-1.5"
                       onClick={(e) => e.stopPropagation()}
                     >
                       <button
                         type="button"
                         disabled={markPaidPending}
                         onClick={() => onBatchMarkPaid(g)}
-                        className="rounded-md bg-violet-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                        className="whitespace-nowrap rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60 sm:rounded-md sm:px-2 sm:py-1 sm:text-[11px]"
                         title={`Mark ${g.approvedCount} approved expense(s) as paid`}
                       >
                         Paid ({g.approvedCount})
@@ -2138,14 +2140,14 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                   )
                 ) : g.pendingCount > 0 ? (
                   <div
-                    className="flex items-center justify-end gap-1.5"
+                    className="flex items-center justify-end gap-1 sm:gap-1.5"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button
                       type="button"
                       disabled={decidePending}
                       onClick={() => onBatchDecide(g, "rejected")}
-                      className="rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60"
+                      className="whitespace-nowrap rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-100 disabled:opacity-60 sm:rounded-md sm:px-2 sm:py-1 sm:text-[11px]"
                     >
                       Reject
                     </button>
@@ -2154,7 +2156,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                         type="button"
                         disabled={decidePending}
                         onClick={() => onBatchDecide(g, "onhold")}
-                        className="rounded-md border border-sky-300 bg-sky-50 px-2 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60"
+                        className="whitespace-nowrap rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-100 disabled:opacity-60 sm:rounded-md sm:px-2 sm:py-1 sm:text-[11px]"
                       >
                         On Hold
                       </button>
@@ -2163,7 +2165,7 @@ function AdminEmployeeTable({ expenses, isLoading, decidePending, onOpenEmployee
                       type="button"
                       disabled={decidePending}
                       onClick={() => onBatchDecide(g, "approved")}
-                      className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                      className="whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 sm:rounded-md sm:px-2 sm:py-1 sm:text-[11px]"
                     >
                       Approve
                     </button>
@@ -2216,11 +2218,11 @@ function StatusMix({ pending, approved, rejected, onHold, paid }) {
   ].filter((i) => i.count > 0);
   if (!items.length) return <span className="text-zinc-400">—</span>;
   return (
-    <div className="flex flex-wrap items-center gap-1">
+    <div className="flex flex-wrap items-center gap-0.5 sm:gap-1">
       {items.map((i) => (
         <span
           key={i.label}
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${i.cls}`}
+          className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-1.5 py-0 text-[10px] font-medium ring-1 sm:px-2 sm:py-0.5 sm:text-[11px] ${i.cls}`}
           title={`${i.label}: ${i.count}`}
         >
           {i.label}
@@ -2619,7 +2621,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                     type="button"
                                     disabled={decidePending}
                                     onClick={() => handleDecide(actOn.map(r => r.id), "rejected", decisionNote.trim())}
-                                    className="rounded-md border border-rose-300 bg-white px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60"
+                                    className="whitespace-nowrap rounded border border-rose-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-60 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                                   >
                                     Reject{suffix}
                                   </button>
@@ -2628,7 +2630,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                       type="button"
                                       disabled={decidePending}
                                       onClick={() => handleDecide(actOn.map(r => r.id), "onhold", decisionNote.trim())}
-                                      className="rounded-md border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                      className="whitespace-nowrap rounded border border-sky-300 bg-white px-1.5 py-0.5 text-[10px] font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                                     >
                                       Hold{suffix}
                                     </button>
@@ -2637,7 +2639,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                     type="button"
                                     disabled={decidePending}
                                     onClick={() => handleDecide(actOn.map(r => r.id), "approved", decisionNote.trim())}
-                                    className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                    className="whitespace-nowrap rounded bg-emerald-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                                   >
                                     Approve{suffix}
                                   </button>
@@ -2651,7 +2653,7 @@ function EmployeeExpensesModal({ group, monthFilter, onClose, onDecide, onUpdate
                                   type="button"
                                   disabled={markPaidPending}
                                   onClick={() => onMarkPaid(approvedExpenses.map(r => r.id))}
-                                  className="rounded-md bg-violet-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60"
+                                  className="whitespace-nowrap rounded bg-violet-600 px-1.5 py-0.5 text-[10px] font-semibold text-white hover:bg-violet-700 disabled:opacity-60 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                                   title={`Mark ${approvedExpenses.length} approved expense(s) from this day as paid`}
                                 >
                                   Paid ({approvedExpenses.length})
@@ -3152,7 +3154,7 @@ function MonthlySummaryModal({ allExpenses, monthFilter, onClose }) {
           </div>
         </div>
 
-        <div className="max-h-[78vh] overflow-y-auto p-5">
+        <div className="max-h-[78vh] overflow-auto p-5">
           {groups.length === 0 ? (
             <p className="rounded-md border border-zinc-200 bg-zinc-50 px-4 py-6 text-center text-sm text-zinc-500">
               No expenses recorded in {monthLabel}.
@@ -3357,32 +3359,25 @@ function BillPreviewOverlay({ expense, onClose }) {
 function BillCountIndicator({ withBills, total }) {
   // Compact "✓ 3/6" / "✓ 6/6" / "✗ 0/6" used in the admin grouped table.
   if (total === 0) return <span className="text-zinc-400">—</span>;
+  // Plain compact count — no icon, never wraps. Colour alone carries the
+  // state: green = all rows have bills, amber = some, red = none.
   if (withBills === 0) {
     return (
       <span
-        className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
+        className="whitespace-nowrap text-[11px] font-semibold tabular-nums text-rose-600"
         title={`No bills attached on any of ${total} expense(s)`}
       >
-        <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-          <path d="M4.7 4.7a1 1 0 0 1 1.4 0L10 8.6l3.9-3.9a1 1 0 1 1 1.4 1.4L11.4 10l3.9 3.9a1 1 0 0 1-1.4 1.4L10 11.4l-3.9 3.9a1 1 0 1 1-1.4-1.4L8.6 10 4.7 6.1a1 1 0 0 1 0-1.4Z" />
-        </svg>
-        0 / {total}
+        0/{total}
       </span>
     );
   }
   const allHave = withBills === total;
-  const cls = allHave
-    ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-    : "bg-amber-50 text-amber-800 ring-amber-200";
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold ring-1 ${cls}`}
+      className={`whitespace-nowrap text-[11px] font-semibold tabular-nums ${allHave ? "text-emerald-600" : "text-amber-600"}`}
       title={`${withBills} of ${total} expense(s) have a bill attached`}
     >
-      <svg viewBox="0 0 20 20" fill="currentColor" className="h-3 w-3" aria-hidden>
-        <path d="M16.7 5.3a1 1 0 0 1 0 1.4l-7 7a1 1 0 0 1-1.4 0l-3-3a1 1 0 1 1 1.4-1.4L9 11.6l6.3-6.3a1 1 0 0 1 1.4 0Z" />
-      </svg>
-      {withBills} / {total}
+      {withBills}/{total}
     </span>
   );
 }
@@ -3884,7 +3879,7 @@ function EmployeeAdvanceModal({ onClose, onSave, saving }) {
           <button type="button" onClick={onClose} className="text-zinc-400 hover:text-zinc-600 text-lg leading-none">×</button>
         </div>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-5">
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-[11px] font-medium text-zinc-600">Date received</label>
               <input
@@ -3991,7 +3986,7 @@ function AddAdvanceModal({ employees, onClose, onSave, saving, simpleMode = fals
               ))}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-[11px] font-medium text-zinc-600">Date</label>
               <input
@@ -4032,7 +4027,7 @@ function AddAdvanceModal({ employees, onClose, onSave, saving, simpleMode = fals
 
               {/* Payment details — filling the paid date records the advance as
                   already disbursed instead of leaving it in the pending queue. */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-zinc-600">Paid date (optional)</label>
                   <input
@@ -4190,8 +4185,11 @@ function AdvancesTable({ items, onAddAdvance }) {
           </div>
         </div>
       </div>
+      {/* Fixed-height scroller: the header stays pinned, only rows scroll
+          (both axes), so a long advances list can't stretch the page. */}
+      <div className="max-h-[360px] overflow-auto">
       <table className="min-w-full divide-y divide-zinc-100 text-xs">
-        <thead className="bg-zinc-50 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
+        <thead className="sticky top-0 z-10 bg-zinc-50 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-600">
           <tr>
             <th className="px-4 py-2">Employee</th>
             <th className="px-4 py-2 text-right">Total Expense</th>
@@ -4238,6 +4236,7 @@ function AdvancesTable({ items, onAddAdvance }) {
           )}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }
@@ -4348,11 +4347,11 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                   // (saving sends it back to pending).  Delete stays limited
                   // to pending / on hold.  Approved / paid rows are locked.
                   (r.status === "pending" || r.status === "onhold" || r.status === "rejected") ? (
-                    <div className="flex items-center justify-end gap-1.5">
+                    <div className="flex items-center justify-end gap-1 sm:gap-1.5">
                       <button
                         type="button"
                         onClick={(e) => { e.stopPropagation(); onEdit(r); }}
-                        className="rounded-md border border-orange-300 bg-orange-50 px-2.5 py-1 text-[11px] font-semibold text-orange-700 hover:bg-orange-100"
+                        className="whitespace-nowrap rounded border border-orange-300 bg-orange-50 px-1.5 py-0.5 text-[10px] font-semibold text-orange-700 hover:bg-orange-100 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                         title={r.status === "rejected" ? "Fix and resubmit — this sends the expense back for approval" : undefined}
                       >
                         {r.status === "rejected" ? "Edit & resubmit" : "Edit"}
@@ -4361,7 +4360,7 @@ function ExpenseTable({ rows, isLoading, isAdmin, onOpen, onEdit, onDelete }) {
                         <button
                           type="button"
                           onClick={(e) => { e.stopPropagation(); onDelete(r); }}
-                          className="rounded-md border border-rose-300 bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                          className="whitespace-nowrap rounded border border-rose-300 bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 hover:bg-rose-100 sm:rounded-md sm:px-2.5 sm:py-1 sm:text-[11px]"
                           title="Delete this expense — only allowed while it's still pending or on hold"
                         >
                           Delete
@@ -4486,7 +4485,7 @@ function ExpenseModal({ row, isAdmin, onClose, onDecide, onDelete, decidePending
           </button>
         </div>
 
-        <div className="max-h-[78vh] overflow-y-auto p-5">
+        <div className="max-h-[78vh] overflow-auto p-5">
           <div className="grid grid-cols-2 gap-4 text-[12px] sm:grid-cols-3">
             <KV k="Status"><StatusPill status={row.status} /></KV>
             <KV k="Type">

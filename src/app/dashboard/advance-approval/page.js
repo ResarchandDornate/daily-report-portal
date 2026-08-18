@@ -338,6 +338,7 @@ function ApplyModal({ onClose, editing }) {
               <div className="bg-orange-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-orange-700 border-b border-orange-100">
                 Expense Summary
               </div>
+              <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-zinc-50 text-xs font-semibold uppercase tracking-wide text-zinc-500 border-b border-zinc-100">
@@ -385,6 +386,7 @@ function ApplyModal({ onClose, editing }) {
                   </tr>
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
 

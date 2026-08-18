@@ -219,7 +219,7 @@ export default function SummaryPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Stat label="Reports in range" value={stats.total} />
         <Stat label="Employees covered" value={stats.employees} />
         <Stat label="Reported challenges" value={stats.challenges} />
